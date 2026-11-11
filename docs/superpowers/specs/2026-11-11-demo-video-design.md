@@ -46,8 +46,9 @@
 
 ## 錄影
 
-- 筆電 B 準備好時，Bob 在筆電 B 上操作。
-- 筆電 A 的畫面以 Oceania feed 為主，旁邊是兩個 agent 與 Slack。
+- demo 有三輪（spec §8）。
+- Bob 的 agent 在筆電 B 上執行。Tverous 在筆電 A 透過 SSH 與 tailnet 操作它。
+- 筆電 A 的畫面以 Oceania feed 為主，旁邊是兩個 agent 與 Slack。參賽團隊只錄製筆電 A 的螢幕。
 - 錄影步驟見 `docs/demo-runbook.md`。
 
 ## 留給實作者決定
