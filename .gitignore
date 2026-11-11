@@ -3,3 +3,4 @@ node_modules/
 members.json
 tower.db*
 .DS_Store
+.tower/

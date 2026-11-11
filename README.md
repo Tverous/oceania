@@ -29,7 +29,7 @@ Tower has three parts:
 
 1. **`tower hook`** (`src/adapter.ts`). Each agent hook runs this command. It reads the hook payload, adds local git data (repo, base commit, diff, latest known main), sends both to Tower, and prints the answer in the format of that agent. It uses only Node built-in modules, so a computer that runs only an agent does not need `npm install`. If Tower is not available, the command prints nothing and exits with code 0, so the agent continues to work.
 2. **Tower server** (`src/cli.ts serve`). One Node process keeps the Memory in `tower.db`, receives hook requests on `127.0.0.1:4100`, runs the master agent, connects to Slack in Socket Mode, and uses the `gh` CLI for GitHub.
-3. **Master agent** (`src/master.ts`, `src/judge.ts`). Each new task, diff, or push starts one judge round. A judge round uses the Claude Agent SDK with Claude Opus and these tools: `read_memory`, `get_spec`, `track_conflict`, `notify`, `post_activity`, `escalate`.
+3. **Master agent** (`src/master.ts`, `src/judge.ts`). Each new task, diff, or push starts one judge round. A judge round uses the Claude Agent SDK with Claude Opus and these tools: `read_memory`, `get_spec`, `track_conflict`, `notify`, `post_activity`, `escalate`, `check_merge`, `run_in_worktree`.
 
 ## Conflict lifecycle
 
@@ -43,12 +43,15 @@ Memory keeps one record for each conflict, from discovery to resolution. The sta
 
 - **Live check.** Before each file write, Tower checks the path against the diffs of the other sessions in the same repo. If another session changed the file, and this session did not see that diff version, Tower denies the write and sends the other diff. The session that changed the file first has priority.
 - **Push detection.** After each tool call, the hook reports the latest known main of the clone. When main changes and files leave the diff of the session, Tower records a push. A pull does not remove files from the diff, so a pull is not a push.
+- **Merge check.** Tower keeps a bare clone of the repo in `.tower/repo` (not in git). It clones `https://<repo>.git` when the first session reports git data. After each tool call, Tower updates the shadow ref `refs/tower/<session>` in the background: a commit with the session diff on top of the base commit of the session. The `check_merge` tool runs `git merge-tree --write-tree` on the shadow refs of two sessions and returns the files that conflict. No work tree changes.
+- **Test check.** The `run_in_worktree` tool merges the shadow refs of two sessions in the same way. If the merge has no conflicts, Tower checks out the merged tree in a temporary `git worktree` and runs `npm test` there. Thus the master agent can find a change in one diff that breaks the code in the other diff. The tool returns the test output (at most 9,000 bytes) when the tests fail. Tower stops the tests after 120 seconds and always removes the temporary worktree. If `package.json` has no `test` script, Tower does not run tests. Tower does not run `npm install` in the worktree. The tests run the code of the agents on the Tower computer, and they do not get the Slack and Anthropic secrets from `.env`.
 - **Each round,** the master agent checks each open conflict again. It updates the stage and the impact, takes the next action, or marks the conflict resolved. A decision stays open until main has it.
 
 ## Requirements
 
 - Node 26 (Tower runs the TypeScript files directly).
 - `gh`, signed in to GitHub.
+- Git 2.38 or later, for `git merge-tree --write-tree`. Git on the Tower computer must be able to clone the repo over HTTPS. For a private repo, run `gh auth setup-git`.
 - A Slack workspace with the Tower app. Create the app from `slack-manifest.json`, install it, and create an app-level token with the `connections:write` scope.
 - An Anthropic API key for the master agent only. Do not set `ANTHROPIC_API_KEY` in the shell that runs Claude Code.
 - Tailscale, if an agent runs on a different computer.

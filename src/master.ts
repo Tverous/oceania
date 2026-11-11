@@ -1,6 +1,8 @@
 import { z } from 'zod'
 import type { ZodRawShape } from 'zod'
 import type { Memory } from './memory.ts'
+import { TEST_TIMEOUT_MS } from './shadow.ts'
+import type { Shadow } from './shadow.ts'
 import { clip, decisionComment, note, resume } from './text.ts'
 import type { Conflict, EventKind, Spec, TowerEvent } from './types.ts'
 
@@ -41,7 +43,7 @@ function define<S extends ZodRawShape>(t: Tool<S>): Tool<S> {
 
 const session = z.string().describe('Session id from read_memory.')
 
-export function createTools(memory: Memory, chat: Chat, specs: Specs): Tools {
+export function createTools(memory: Memory, chat: Chat, specs: Specs, shadow: Shadow): Tools {
   const need = (id: string) => {
     if (!memory.session(id)) throw new Error(`Session ${id} does not exist. Use a session id from read_memory.`)
   }
@@ -130,6 +132,50 @@ export function createTools(memory: Memory, chat: Chat, specs: Specs): Tools {
         await chat.openConflict({ ...conflict, channel, author, question, options })
         memory.escalate(id, { channel, author, question, options })
         return `Opened #${channel}`
+      },
+    }),
+    check_merge: define({
+      description:
+        'Merge the diffs of two sessions in the same repo with git merge-tree. ' +
+        'The result tells if the diffs merge, or which files conflict. No work tree changes.',
+      schema: { a: session, b: session },
+      async run({ a, b }) {
+        need(a)
+        need(b)
+        const result = await shadow.merge(a, b)
+        if (result.status === 'missing') return `Session ${result.session} has no shadow ref yet.`
+        if (result.status === 'clean') return `The diffs of sessions ${a} and ${b} merge with no conflicts.`
+        return `The diffs of sessions ${a} and ${b} conflict in: ${result.files.join(', ')}`
+      },
+    }),
+    run_in_worktree: define({
+      description:
+        'Merge the diffs of two sessions in the same repo. Then run npm test on the merged code in a temporary ' +
+        'git worktree. Use it to find a change in one diff that breaks the code in the other diff. ' +
+        `Tower stops the tests after ${TEST_TIMEOUT_MS / 1000} seconds.`,
+      schema: { a: session, b: session },
+      async run({ a, b }) {
+        need(a)
+        need(b)
+        const result = await shadow.test(a, b)
+        const merged = `the merged diffs of sessions ${a} and ${b}`
+        switch (result.status) {
+          case 'missing':
+            return `Session ${result.session} has no shadow ref yet.`
+          case 'conflict':
+            return `The diffs of sessions ${a} and ${b} conflict in: ${result.files.join(', ')}. Tower did not run the tests.`
+          case 'untested':
+            return 'The repo has no test command: package.json has no "test" script. Tower did not run tests.'
+          case 'passed':
+            return `npm test passed on ${merged}.`
+          case 'failed':
+            return clip(`npm test failed on ${merged}. The output is below.\n${result.output}`)
+          case 'timeout':
+            return clip(
+              `npm test did not stop in ${TEST_TIMEOUT_MS / 1000} seconds on ${merged}. ` +
+                `Tower stopped it. The output is below.\n${result.output}`,
+            )
+        }
       },
     }),
   }

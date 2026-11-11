@@ -1,9 +1,12 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { Memory } from '../src/memory.ts'
 import { claudeJudge } from '../src/judge.ts'
 import { createTools, roundPrompt } from '../src/master.ts'
 import type { Chat, Specs } from '../src/master.ts'
+import { Shadow } from '../src/shadow.ts'
 import { decisionComment, resume } from '../src/text.ts'
 import type { Conflict } from '../src/types.ts'
 
@@ -65,7 +68,8 @@ test('real judge handles the demo sequence', { skip: !process.env.ANTHROPIC_API_
     },
     async comment() {},
   }
-  const tools = createTools(memory, chat, specs)
+  // The sessions report no git data, so check_merge finds no shadow refs.
+  const tools = createTools(memory, chat, specs, new Shadow(join(tmpdir(), 'tower-unused-shadow')))
 
   let cursor = memory.lastEventId()
   async function round(step: number): Promise<void> {
