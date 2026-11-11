@@ -560,7 +560,9 @@ Launch a Pro plan with a free trial. Add the plan and show it on the pricing pag
 角色：
 
 - Tverous 扮演 spec 作者，並在最後打開進度看板。
-- 參賽團隊的另外兩個人扮演 Alice 與 Bob。Alice 在筆電 A 上操作，Bob 在筆電 B 上操作。因此影片顯示不同的人在不同的電腦上工作，而且他們的 agent 透過 Tower 同步。
+- 參賽團隊的另外兩個人扮演 Alice 與 Bob。Alice 在筆電 A 上操作。
+- Bob 預設在筆電 A 的 `bob/` clone 上操作，因為筆電 B 可能來不及準備（2026-11-11 的決定）。Bob 的 hook 仍然透過 tailnet 的 HTTPS 網址連到 Tower。
+- 筆電 B 準備好時，Bob 改在筆電 B 上操作。這樣影片顯示不同的人在不同的電腦上工作。這只改變設定，不改變程式碼。
 - 三個人都需要 Slack workspace 帳號，因為 Tower 會邀請 Alice 與 Bob 進入衝突頻道。
 - 錄影：兩台筆電同時錄製各自的螢幕。參賽團隊用 QuickTime Player 的 **Edit → Add Clip to End**，依照影片節奏接起兩台筆電的片段。
 - 英文：Tverous 的 Copilot 記憶有一條「用繁體中文回覆」的偏好。Copilot CLI 在互動模式會讀取記憶。因此錄影前，Tverous 在 Copilot CLI 執行 `/memory off`。錄影後，Tverous 執行 `/memory on`。
@@ -692,6 +694,7 @@ Launch a Pro plan with a free trial. Add the plan and show it on the pricing pag
 | 長期目標：工作不限於程式碼，也包含業務、客服、PM、行銷與主管的工作 | 參賽團隊 |
 | MVP 只支援工程師。demo 只有兩位工程師，不包含業務 Carol | 參賽團隊 |
 | MVP 只使用 hook。之後的版本用 MCP 連接沒有 hook 的 agent | 實作者提案，參賽團隊同意 |
+| Bob 預設在筆電 A 的 `bob/` 上執行。筆電 B 是選用的 | 實作者決定，參賽團隊授權（2026-11-11） |
 | master 是 agent，而不只是一次模型呼叫 | 參賽團隊 |
 | 衝突有生命週期：發生前預測，發生中阻止，發生後修正。生命週期是一個迴圈 | 參賽團隊 |
 | master agent 依照影響決定由誰解決衝突 | 參賽團隊 |
