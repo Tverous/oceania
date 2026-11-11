@@ -21,13 +21,15 @@ for clone in alice main bob; do
   git -C "$ACME/$clone" reset --quiet --hard origin/main
   git -C "$ACME/$clone" clean -fd --quiet
 done
-for id in $(gh api "repos/$REPO/issues/1/comments" --paginate --jq '.[] | select(.body | startswith("Decision:")) | .id'); do
-  gh api --silent -X DELETE "repos/$REPO/issues/comments/$id"
+for issue in 1 2 3; do
+  for id in $(gh api "repos/$REPO/issues/$issue/comments" --paginate --jq '.[] | select(.body | startswith("Decision:")) | .id'); do
+    gh api --silent -X DELETE "repos/$REPO/issues/comments/$id"
+  done
+  # An agent may close the spec issue when it finishes the work.
+  if [ "$(gh issue view "$issue" --repo "$REPO" --json state --jq .state)" = CLOSED ]; then
+    gh issue reopen "$issue" --repo "$REPO" >/dev/null
+  fi
 done
-# An agent may close the spec issue when it finishes the work.
-if [ "$(gh issue view 1 --repo "$REPO" --json state --jq .state)" = CLOSED ]; then
-  gh issue reopen 1 --repo "$REPO" >/dev/null
-fi
 if [ ! -d "$ACME/bob" ]; then
   echo "Laptop B: cd ~/acme/bob && git fetch && git reset --hard origin/main && git clean -fd"
 fi
