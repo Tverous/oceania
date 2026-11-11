@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { devNull, tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { gitInfo } from '../src/git.ts'
 import { createTools } from '../src/master.ts'
 import type { Chat, Specs, Tools } from '../src/master.ts'
@@ -29,7 +29,7 @@ function git(cwd: string, ...args: string[]): string {
 }
 
 function write(cwd: string, file: string, text: string): void {
-  mkdirSync(join(cwd, 'src'), { recursive: true })
+  mkdirSync(dirname(join(cwd, file)), { recursive: true })
   writeFileSync(join(cwd, file), text)
 }
 
@@ -42,20 +42,23 @@ const specs: Specs = {
 }
 
 /**
- * A bare origin with `src/plans.ts`, two clones of it (Alice's and Bob's), and a Shadow that clones the origin.
+ * A bare origin with the `seed` files, two clones of it (Alice's and Bob's), and a Shadow that clones the origin.
  * Sessions a and b are in Memory.
  */
-function setup(t: TestContext): { alice: string; bob: string; shadow: Shadow; tools: Tools } {
+function setup(
+  t: TestContext,
+  seed: Record<string, string> = { 'src/plans.ts': 'export const trialDays = 0\n' },
+): { alice: string; bob: string; shadow: Shadow; tools: Tools } {
   const dir = mkdtempSync(join(tmpdir(), 'tower-shadow-'))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
-  const seed = join(dir, 'seed')
+  const first = join(dir, 'seed')
   const origin = join(dir, 'origin.git')
-  mkdirSync(seed)
-  git(seed, 'init')
-  write(seed, 'src/plans.ts', 'export const trialDays = 0\n')
-  git(seed, 'add', '-A')
-  git(seed, 'commit', '-m', 'seed')
-  git(dir, 'clone', '--bare', seed, origin)
+  mkdirSync(first)
+  git(first, 'init')
+  for (const [file, text] of Object.entries(seed)) write(first, file, text)
+  git(first, 'add', '-A')
+  git(first, 'commit', '-m', 'seed')
+  git(dir, 'clone', '--bare', first, origin)
   git(dir, 'clone', origin, 'alice')
   git(dir, 'clone', origin, 'bob')
 
@@ -100,4 +103,24 @@ test('check_merge passes changes in different files', async (t) => {
   await observe(shadow, 'b', bob)
 
   assert.equal(await tools.check_merge.run({ a: 'a', b: 'b' }), 'The diffs of sessions a and b merge with no conflicts.')
+})
+
+test('run_in_worktree returns test failures', async (t) => {
+  const { alice, bob, shadow, tools } = setup(t, {
+    'package.json': JSON.stringify({ type: 'module', scripts: { test: 'node test.js' } }),
+    'src/plans.js': 'export const trialDays = 0\n',
+    'test.js': "console.log('ok')\n",
+  })
+  // Each diff passes the tests alone. Alice renames an export, and Bob's new page uses the old name.
+  write(alice, 'src/plans.js', 'export const trialLength = 14\n')
+  write(bob, 'src/pricing.js', "import { trialDays } from './plans.js'\nexport const page = `Trial: ${trialDays} days`\n")
+  write(bob, 'test.js', "import './src/pricing.js'\n")
+  await observe(shadow, 'a', alice)
+  await observe(shadow, 'b', bob)
+
+  const text = await tools.run_in_worktree.run({ a: 'a', b: 'b' })
+  assert.match(text, /^npm test failed on the merged diffs of sessions a and b\./)
+  assert.match(text, /does not provide an export named 'trialDays'/)
+  // Tower removed the temporary worktree, so only the bare clone stays.
+  assert.equal(git(shadow.dir, 'worktree', 'list', '--porcelain').match(/^worktree /gm)?.length, 1)
 })

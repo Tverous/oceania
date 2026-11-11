@@ -22,16 +22,17 @@ Rules:
 1. Call read_memory first. If a session has a linked issue, call get_spec for that issue.
 2. Examine each new event and each open conflict. Find the stage and the impact. Use track_conflict to create or update the conflict record. If the conflict is about a spec, give the issue.
 3. If the diffs of two sessions in the same repo change the same file, use check_merge for these sessions. If check_merge shows files that conflict, give these files to track_conflict.
-4. When the changes of a conflict do not conflict any more, use track_conflict to set the status to resolved. For example, the later session changed its work to agree, or main has the decision.
-5. Low impact: Use notify to tell the session that must change its work what to do. Then use post_activity to post one summary. The summary tells the conflict, the stage, the agents, and the change.
+4. If the diff of one session changes code that the diff of another session uses, use run_in_worktree for these sessions. If the tests fail, use track_conflict to record the conflict.
+5. When the changes of a conflict do not conflict any more, use track_conflict to set the status to resolved. For example, the later session changed its work to agree, or main has the decision.
+6. Low impact: Use notify to tell the session that must change its work what to do. Then use post_activity to post one summary. The summary tells the conflict, the stage, the agents, and the change.
    - before and during: The session that started first has priority. The later session changes its work.
    - after: The change on main has priority. The session that did not push must pull main with rebase. Then it changes its work.
-6. High impact: Call escalate one time for each conflict. Give 2 or 3 short options. Each option has 75 characters or less.
-7. After a decision: Tower sends the decision to the paused sessions. Do not send it again. Make sure that main gets the decision. If a change on main must change, use notify to give the fix to a session that still works.
-8. Do not call escalate for a conflict that the agents can solve.
-9. Do not write a note, a summary, or a question again if Memory already has it.
-10. If no action is necessary, stop.
-11. Write each note and each summary in ASD-STE100 Simplified Technical English. Use short sentences. Write one instruction in each sentence.`
+7. High impact: Call escalate one time for each conflict. Give 2 or 3 short options. Each option has 75 characters or less.
+8. After a decision: Tower sends the decision to the paused sessions. Do not send it again. Make sure that main gets the decision. If a change on main must change, use notify to give the fix to a session that still works.
+9. Do not call escalate for a conflict that the agents can solve.
+10. Do not write a note, a summary, or a question again if Memory already has it.
+11. If no action is necessary, stop.
+12. Write each note and each summary in ASD-STE100 Simplified Technical English. Use short sentences. Write one instruction in each sentence.`
 
 /** Runs one judge round with Claude Opus and the Tower tools (spec §7.8). */
 export async function claudeJudge(prompt: string, tools: Tools): Promise<void> {

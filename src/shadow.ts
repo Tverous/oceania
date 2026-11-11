@@ -1,12 +1,17 @@
-import { execFile } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { mkdir, mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
+import { MAX_TEXT } from './text.ts'
 import type { GitInfo } from './types.ts'
 
 /** Longest run of one git command, so that a stuck fetch does not stop the queue. */
 const GIT_TIMEOUT_MS = 60_000
+/** Longest run of `npm test` in a merged worktree. */
+export const TEST_TIMEOUT_MS = 120_000
+/** The secrets in the .env of Tower. The tests run code from the agents, so they do not get these values. */
+const SECRETS = ['ANTHROPIC_API_KEY', 'SLACK_BOT_TOKEN', 'SLACK_APP_TOKEN']
 
 /** The author and committer of shadow commits. Tower does not use the git config of the user for them. */
 const IDENTITY = {
@@ -25,6 +30,13 @@ export type MergeResult =
   | { status: 'missing'; session: string }
   | { status: 'clean'; tree: string }
   | { status: 'conflict'; tree: string; files: string[] }
+
+export type TestResult =
+  | Exclude<MergeResult, { status: 'clean' }>
+  | { status: 'untested' }
+  | { status: 'passed' }
+  | { status: 'failed'; output: string }
+  | { status: 'timeout'; output: string }
 
 type ShadowInput = Pick<GitInfo, 'repo' | 'base' | 'patch'>
 
@@ -49,6 +61,52 @@ function git(
     // git can exit before it reads stdin. The exit code reports that failure, so ignore the EPIPE.
     child.stdin?.on('error', () => {})
     child.stdin?.end(o.input)
+  })
+}
+
+/**
+ * Runs `npm test` in `cwd`, in a process group of its own. On a timeout, Tower kills the group,
+ * so that no test process stays. `output` is stdout and stderr, at most about MAX_TEXT bytes.
+ */
+function npmTest(cwd: string): Promise<{ code: number | null; output: string; timedOut: boolean }> {
+  // The tests are in a different package, so they do not get the npm values of the Tower process.
+  const env: NodeJS.ProcessEnv = { npm_config_update_notifier: 'false' }
+  for (const [name, value] of Object.entries(process.env)) {
+    if (!/^npm_/i.test(name) && !SECRETS.includes(name)) env[name] = value
+  }
+  return new Promise((done, fail) => {
+    const child = spawn('npm', ['test'], { cwd, env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] })
+    const chunks: Buffer[] = []
+    let size = 0
+    const collect = (chunk: Buffer) => {
+      if (size < MAX_TEXT) chunks.push(chunk)
+      size += chunk.length
+    }
+    child.stdout.on('data', collect)
+    child.stderr.on('data', collect)
+    const kill = () => {
+      try {
+        if (child.pid) process.kill(-child.pid, 'SIGKILL')
+      } catch {
+        // The group has no processes.
+      }
+    }
+    let timedOut = false
+    const timer = setTimeout(() => {
+      timedOut = true
+      kill()
+    }, TEST_TIMEOUT_MS)
+    child.on('error', (error) => {
+      clearTimeout(timer)
+      fail(error)
+    })
+    // A test can start a process that does not stop, for example a server. When npm stops, Tower kills it,
+    // so that its open stdout does not keep `close` from coming.
+    child.on('exit', kill)
+    child.on('close', (code) => {
+      clearTimeout(timer)
+      done({ code, output: Buffer.concat(chunks).toString(), timedOut })
+    })
   })
 }
 
@@ -98,18 +156,44 @@ export class Shadow {
 
   /** Merges the shadow refs of sessions `a` and `b` with `git merge-tree`. No work tree changes. */
   merge(a: string, b: string): Promise<MergeResult> {
-    return this.#serial(async () => {
-      for (const session of [a, b]) {
-        if (!existsSync(this.dir) || !(await this.#has(`refs/tower/${session}`))) return { status: 'missing', session }
+    return this.#serial(() => this.#merge(a, b))
+  }
+
+  /**
+   * Merges the shadow refs of sessions `a` and `b`. If the merge has no conflicts, checks out the merged tree
+   * in a temporary worktree and runs `npm test` there. Tower always removes the worktree.
+   */
+  async test(a: string, b: string): Promise<TestResult> {
+    const tmp = await mkdtemp(join(tmpdir(), 'tower-worktree-'))
+    const work = join(tmp, 'work')
+    try {
+      const merged = await this.#serial(async () => {
+        const result = await this.#merge(a, b)
+        if (result.status !== 'clean') return result
+        const parents = ['-p', `refs/tower/${a}`, '-p', `refs/tower/${b}`]
+        const message = `Tower merge of sessions ${a} and ${b}`
+        const commit = await this.#git(['commit-tree', '--no-gpg-sign', ...parents, '-m', message, result.tree])
+        await this.#git(['worktree', 'add', '--detach', '--quiet', work, commit.stdout.trim()])
+        return result
+      })
+      if (merged.status !== 'clean') return merged
+      const pkg = join(work, 'package.json')
+      if (!existsSync(pkg) || typeof JSON.parse(await readFile(pkg, 'utf8')).scripts?.test !== 'string') {
+        return { status: 'untested' }
       }
-      const args = ['-c', 'core.quotePath=false', 'merge-tree', '--write-tree', '--name-only']
-      const { code, stdout } = await this.#git([...args, `refs/tower/${a}`, `refs/tower/${b}`], { ok: [1] })
-      // The output is the tree, then on a conflict one line for each file, then an empty line and messages.
-      const [tree, ...lines] = stdout.split('\n')
-      if (code === 0) return { status: 'clean', tree }
-      const end = lines.indexOf('')
-      return { status: 'conflict', tree, files: end === -1 ? lines : lines.slice(0, end) }
-    })
+      // The tests run outside the queue, so the shadow refs stay up to date while they run.
+      const { code, output, timedOut } = await npmTest(work)
+      if (timedOut) return { status: 'timeout', output }
+      return code === 0 ? { status: 'passed' } : { status: 'failed', output }
+    } finally {
+      await rm(tmp, { recursive: true, force: true })
+      // `git worktree prune` removes the data of the deleted worktree from the clone.
+      if (existsSync(this.dir)) {
+        await this.#serial(() => this.#git(['worktree', 'prune'])).catch((error) => {
+          console.error('Tower: git worktree prune failed.', error)
+        })
+      }
+    }
   }
 
   /** Runs `fn` after all earlier jobs. A failed job does not stop the next job. */
@@ -117,6 +201,19 @@ export class Shadow {
     const run = this.#queue.then(fn)
     this.#queue = run.catch(() => {})
     return run
+  }
+
+  async #merge(a: string, b: string): Promise<MergeResult> {
+    for (const session of [a, b]) {
+      if (!existsSync(this.dir) || !(await this.#has(`refs/tower/${session}`))) return { status: 'missing', session }
+    }
+    const args = ['-c', 'core.quotePath=false', 'merge-tree', '--write-tree', '--name-only']
+    const { code, stdout } = await this.#git([...args, `refs/tower/${a}`, `refs/tower/${b}`], { ok: [1] })
+    // The output is the tree, then on a conflict one line for each file, then an empty line and messages.
+    const [tree, ...lines] = stdout.split('\n')
+    if (code === 0) return { status: 'clean', tree }
+    const end = lines.indexOf('')
+    return { status: 'conflict', tree, files: end === -1 ? lines : lines.slice(0, end) }
   }
 
   async #write(session: string, { repo, base, patch }: ShadowInput): Promise<void> {
