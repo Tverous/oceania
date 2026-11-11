@@ -9,7 +9,7 @@ const ALICE = 'alice@example.com'
 const BOB = 'bob@example.com'
 const a = { id: 'a', agent: 'Copilot CLI', member: ALICE }
 const b = { id: 'b', agent: 'Claude Code', member: BOB }
-const CHANNEL = 'tower-1-x'
+const CHANNEL = 'oceania-1-x'
 
 function setup(): Memory {
   const m = new Memory(':memory:')
@@ -130,7 +130,7 @@ test('observe does not report a push for the first main', () => {
 test('takeNotes delivers each note once', () => {
   const m = setup()
   m.register(b)
-  m.addNote('b', 'Tower note: X\nDo this: Y', true)
+  m.addNote('b', 'Oceania note: X\nDo this: Y', true)
   assert.equal(m.takeNotes('b', true).length, 1)
   assert.equal(m.takeNotes('b', true).length, 0)
 })
@@ -203,7 +203,7 @@ test('escalate pauses every session in the conflict', () => {
   assert.equal(m.pausedBy('a')?.channel, CHANNEL)
   assert.equal(
     m.eventsAfter(0).at(-1)?.text,
-    "Tower paused Alice's agent (Copilot CLI) and Bob's agent (Claude Code). Open question on #1: Which trial terms?",
+    "Oceania paused Alice's agent (Copilot CLI) and Bob's agent (Claude Code). Open question on #1: Which trial terms?",
   )
 })
 
@@ -231,13 +231,13 @@ test('decide resumes a session only when no other question pauses it', () => {
     status: 'open',
     issue: 1,
   })
-  m.escalate(second, { channel: 'tower-1-y', author: 'Tverous', question: 'Card required?', options: ['Yes', 'No'] })
+  m.escalate(second, { channel: 'oceania-1-y', author: 'Tverous', question: 'Card required?', options: ['Yes', 'No'] })
   m.decide(CHANNEL, '30 days', 'RESUME 1')
   for (const s of ['a', 'b']) {
     assert.equal(m.session(s)?.status, 'paused')
     assert.equal(m.pausedBy(s)?.id, second)
   }
-  m.decide('tower-1-y', 'No', 'RESUME 2')
+  m.decide('oceania-1-y', 'No', 'RESUME 2')
   for (const s of ['a', 'b']) {
     assert.equal(m.session(s)?.status, 'idle')
     assert.deepEqual(
@@ -280,9 +280,9 @@ test('onChange fires once per write and stops after unsubscribe', () => {
 })
 
 test('Memory persists in a file', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'tower-'))
+  const dir = mkdtempSync(join(tmpdir(), 'oceania-'))
   try {
-    const path = join(dir, 'tower.db')
+    const path = join(dir, 'oceania.db')
     const first = new Memory(path)
     first.upsertMember({ email: ALICE, name: 'Alice' })
     first.register(a)

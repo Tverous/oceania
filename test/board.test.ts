@@ -99,13 +99,13 @@ test('homeView shows the open question, then the decision', () => {
     issue: 1,
   })
   m.escalate(id, {
-    channel: 'tower-1-x',
+    channel: 'oceania-1-x',
     author: 'Tverous',
     question: 'Which trial terms?',
     options: ['14 days, card required', '30 days, no card'],
   })
   assert.ok(JSON.stringify(homeView(m.snapshot())).includes('Open question: Which trial terms?'))
-  m.decide('tower-1-x', '30 days, no card', 'Apply the decision.')
+  m.decide('oceania-1-x', '30 days, no card', 'Apply the decision.')
   const json = JSON.stringify(homeView(m.snapshot()))
   assert.ok(json.includes('Decision: 30 days, no card'))
   assert.ok(!json.includes('Open question'))
@@ -140,7 +140,7 @@ test('homeView stays within Slack limits', () => {
       status: 'open',
       issue: 1,
     })
-    m.escalate(id, { channel: `tower-1-c${id}`, author: 'Tverous', question: 'q'.repeat(5000), options: ['A', 'B'] })
+    m.escalate(id, { channel: `oceania-1-c${id}`, author: 'Tverous', question: 'q'.repeat(5000), options: ['A', 'B'] })
   }
   const view = homeView(m.snapshot())
   assert.ok(view.blocks.length <= 100, `${view.blocks.length} blocks`)

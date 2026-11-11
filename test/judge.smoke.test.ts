@@ -69,7 +69,7 @@ test('real judge handles the demo sequence', { skip: !process.env.ANTHROPIC_API_
     async comment() {},
   }
   // The sessions report no git data, so check_merge finds no shadow refs.
-  const tools = createTools(memory, chat, specs, new Shadow(join(tmpdir(), 'tower-unused-shadow')))
+  const tools = createTools(memory, chat, specs, new Shadow(join(tmpdir(), 'oceania-unused-shadow')))
 
   let cursor = memory.lastEventId()
   async function round(step: number): Promise<void> {
@@ -79,7 +79,7 @@ test('real judge handles the demo sequence', { skip: !process.env.ANTHROPIC_API_
     console.log(`[step ${step}] round took ${Math.round(performance.now() - start)} ms`)
     cursor = memory.lastEventId()
   }
-  const bobNotes = () => memory.notes().filter((n) => n.session === 'b' && n.text.startsWith('Tower note:'))
+  const bobNotes = () => memory.notes().filter((n) => n.session === 'b' && n.text.startsWith('Oceania note:'))
 
   // 1. Alice adds the Pro plan with a 14-day trial that requires a card.
   memory.register({ id: 'a', agent: 'Copilot CLI', member: 'alice@example.com', main: 'm1' })
@@ -109,7 +109,7 @@ test('real judge handles the demo sequence', { skip: !process.env.ANTHROPIC_API_
   assert.equal(memory.conflictByChannel(channel)?.impact, 'high')
   // Conflict B: Bob's page needs the Pro plan that Alice adds (spec §8 step 5, the before stage).
   const duplicate = memory.conflicts().some((c) => c.impact === 'low' && c.sessions.includes('b'))
-  assert.ok(bobNotes().length > 0 || duplicate, 'Bob has a Tower note or a low impact conflict for the Pro plan')
+  assert.ok(bobNotes().length > 0 || duplicate, 'Bob has an Oceania note or a low impact conflict for the Pro plan')
 
   // 3. Tverous decides. As the Stop hook does, each session takes the decision and works again.
   // Then Bob changes the pricing page, and Alice pushes.
@@ -122,7 +122,7 @@ test('real judge handles the demo sequence', { skip: !process.env.ANTHROPIC_API_
   memory.observe('b', { files: ['src/pricing.ts'], patch: BOB_PATCH, main: 'm1' })
   memory.observe('a', { files: [], patch: '', main: 'm2' })
   await round(3)
-  assert.ok(bobNotes().length > before, 'Bob has a new Tower note')
+  assert.ok(bobNotes().length > before, 'Bob has a new Oceania note')
   assert.equal(opened.length, 1)
   console.log(`[conflicts] ${JSON.stringify(memory.conflicts())}`)
   console.log(`[notes] ${JSON.stringify(memory.notes())}`)

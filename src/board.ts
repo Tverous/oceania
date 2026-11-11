@@ -24,7 +24,7 @@ export function homeView(s: Snapshot): types.HomeView {
   return {
     type: 'home',
     blocks: [
-      { type: 'header', text: { type: 'plain_text', text: 'Tower: team status' } },
+      { type: 'header', text: { type: 'plain_text', text: 'Oceania: team status' } },
       section('*Agents*'),
       ...list(sessions, room - conflictRoom, 'agents', 'No agents are active.', sessionText),
       { type: 'divider' },
@@ -52,7 +52,7 @@ function list<T>(items: T[], room: number, noun: string, empty: string, text: (i
   if (!items.length) return [section(empty)]
   const shown: types.KnownBlock[] = items.slice(0, room).map((item) => section(text(item)))
   if (shown.length === items.length) return shown
-  return [...shown, { type: 'context', elements: [{ type: 'mrkdwn', text: `Tower shows ${shown.length} of ${items.length} ${noun}.` }] }]
+  return [...shown, { type: 'context', elements: [{ type: 'mrkdwn', text: `Oceania shows ${shown.length} of ${items.length} ${noun}.` }] }]
 }
 
 function section(text: string): types.SectionBlock {

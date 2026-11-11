@@ -49,7 +49,7 @@ function setup(
   t: TestContext,
   seed: Record<string, string> = { 'src/plans.ts': 'export const trialDays = 0\n' },
 ): { alice: string; bob: string; shadow: Shadow; tools: Tools } {
-  const dir = mkdtempSync(join(tmpdir(), 'tower-shadow-'))
+  const dir = mkdtempSync(join(tmpdir(), 'oceania-shadow-'))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
   const first = join(dir, 'seed')
   const origin = join(dir, 'origin.git')
@@ -65,11 +65,11 @@ function setup(
   const m = new Memory(':memory:')
   m.register({ id: 'a', agent: 'Copilot CLI', member: 'alice@example.com' })
   m.register({ id: 'b', agent: 'Claude Code', member: 'bob@example.com' })
-  const shadow = new Shadow(join(dir, 'tower'), () => origin)
+  const shadow = new Shadow(join(dir, 'oceania'), () => origin)
   return { alice: join(dir, 'alice'), bob: join(dir, 'bob'), shadow, tools: createTools(m, chat, specs, shadow) }
 }
 
-/** Sends the git data of one clone to the Shadow, as Tower does after each PostToolUse. */
+/** Sends the git data of one clone to the Shadow, as Oceania does after each PostToolUse. */
 async function observe(shadow: Shadow, session: string, clone: string): Promise<void> {
   const info = gitInfo(clone, true)
   assert.ok(info)
@@ -121,6 +121,6 @@ test('run_in_worktree returns test failures', async (t) => {
   const text = await tools.run_in_worktree.run({ a: 'a', b: 'b' })
   assert.match(text, /^npm test failed on the merged diffs of sessions a and b\./)
   assert.match(text, /does not provide an export named 'trialDays'/)
-  // Tower removed the temporary worktree, so only the bare clone stays.
+  // Oceania removed the temporary worktree, so only the bare clone stays.
   assert.equal(git(shadow.dir, 'worktree', 'list', '--porcelain').match(/^worktree /gm)?.length, 1)
 })

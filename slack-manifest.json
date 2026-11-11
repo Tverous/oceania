@@ -1,8 +1,8 @@
 {
-  "display_information": { "name": "Tower", "description": "Multiplayer mode for the AI agents of your team" },
+  "display_information": { "name": "Oceania", "description": "Multiplayer mode for the AI agents of your team" },
   "features": {
     "app_home": { "home_tab_enabled": true, "messages_tab_enabled": false },
-    "bot_user": { "display_name": "Tower", "always_online": true }
+    "bot_user": { "display_name": "Oceania", "always_online": true }
   },
   "oauth_config": {
     "scopes": { "bot": ["channels:join", "channels:manage", "channels:read", "chat:write", "users:read", "users:read.email"] }

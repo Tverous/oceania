@@ -11,7 +11,7 @@ const run = promisify(execFile)
  */
 const GH_TIMEOUT_MS = 30_000
 
-/** The fields of `gh issue view --json title,body,author,comments` that Tower reads. */
+/** The fields of `gh issue view --json title,body,author,comments` that Oceania reads. */
 interface Issue {
   title: string
   body: string
@@ -39,7 +39,7 @@ export function ghSpecs(repo: string, timeoutMs = GH_TIMEOUT_MS): Specs {
       // At the timeout, Node gives only "Command failed". Say the cause to the model and in the log.
       const { killed, code } = error as { killed?: boolean; code?: unknown }
       if (killed && code === null) {
-        throw new Error(`Tower stopped "gh ${args.slice(0, 3).join(' ')}" after ${timeoutMs / 1000} seconds.`, { cause: error })
+        throw new Error(`Oceania stopped "gh ${args.slice(0, 3).join(' ')}" after ${timeoutMs / 1000} seconds.`, { cause: error })
       }
       throw error
     }

@@ -4,7 +4,7 @@ import { Memory } from '../src/memory.ts'
 import { decide } from '../src/master.ts'
 import type { Specs } from '../src/master.ts'
 
-const CHANNEL = 'tower-1-x'
+const CHANNEL = 'oceania-1-x'
 
 /** Two sessions, paused by a high impact conflict on #1 that Tverous decides. */
 function setup(): Memory {
@@ -64,7 +64,7 @@ test('decide records the decision, comments, and resumes sessions', async () => 
     'Decision on #1 by Tverous: 30 days, no card\nApply this decision. Then continue your task.',
   )
   assert.deepEqual(comments, [
-    { issue: 1, body: 'Decision: 30 days, no card\n@Tverous decided this in Slack. Tower recorded this decision.' },
+    { issue: 1, body: 'Decision: 30 days, no card\n@Tverous decided this in Slack. Oceania recorded this decision.' },
   ])
 })
 

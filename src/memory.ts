@@ -17,7 +17,7 @@ import type {
   Snapshot,
   Status,
   Task,
-  TowerEvent,
+  OceaniaEvent,
 } from './types.ts'
 
 const SCHEMA = `
@@ -274,18 +274,18 @@ export class Memory {
   }
 
   /** Returns the events after the cursor of `session`, without its own events. Then moves the cursor. */
-  readEvents(session: string): TowerEvent[] {
+  readEvents(session: string): OceaniaEvent[] {
     return this.#write(() => {
       const events = this.#sql.all`SELECT * FROM events
         WHERE id > (SELECT cursor FROM sessions WHERE id = ${session}) AND session IS NOT ${session}
-        ORDER BY id`.map((r) => record<TowerEvent>(r))
+        ORDER BY id`.map((r) => record<OceaniaEvent>(r))
       this.#sql.run`UPDATE sessions SET cursor = ${this.lastEventId()}, updated = ${Date.now()} WHERE id = ${session}`
       return events
     })
   }
 
-  eventsAfter(id: number): TowerEvent[] {
-    return this.#sql.all`SELECT * FROM events WHERE id > ${id} ORDER BY id`.map((r) => record<TowerEvent>(r))
+  eventsAfter(id: number): OceaniaEvent[] {
+    return this.#sql.all`SELECT * FROM events WHERE id > ${id} ORDER BY id`.map((r) => record<OceaniaEvent>(r))
   }
 
   lastEventId(): number {
@@ -295,7 +295,7 @@ export class Memory {
   /**
    * Adds a `stall` event for each working session whose last event is not after `before` (spec §7.4).
    * The stall event stays the last event of the session until the session adds an event.
-   * Thus Tower reports each stall once.
+   * Thus Oceania reports each stall once.
    */
   reportStalls(before: number): void {
     const stalled = this.#sql.all`SELECT s.* FROM sessions s
@@ -360,7 +360,7 @@ export class Memory {
         this.#sql.run`UPDATE sessions SET status = 'paused', updated = ${now} WHERE id = ${s.id}`
       }
       const agents = names.format(sessions.map((s) => this.#who(s)))
-      this.#event('conflict', undefined, `Tower paused ${agents}. Open question on #${c.issue}: ${e.question}`)
+      this.#event('conflict', undefined, `Oceania paused ${agents}. Open question on #${c.issue}: ${e.question}`)
     })
   }
 

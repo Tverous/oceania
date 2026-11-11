@@ -1,11 +1,11 @@
 import { STAGE_LABELS } from './types.ts'
-import type { Note, Snapshot, TowerEvent } from './types.ts'
+import type { Note, Snapshot, OceaniaEvent } from './types.ts'
 
-/** Largest text, in UTF-8 bytes, that Tower sends to an agent. */
+/** Largest text, in UTF-8 bytes, that Oceania sends to an agent. */
 export const MAX_TEXT = 9000
 
 /** ASCII only, so its length is its size in bytes. */
-const CLIPPED = '\n[Tower clipped this text.]'
+const CLIPPED = '\n[Oceania clipped this text.]'
 const encoder = new TextEncoder()
 /** Slack reads these characters as control sequences in mrkdwn. */
 const ENTITIES: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;' }
@@ -17,7 +17,7 @@ export function clip(text: string): string {
   return text.slice(0, read) + CLIPPED
 }
 
-/** Escapes `raw` for Slack mrkdwn. When the result has more than `max` characters, Tower cuts it and adds `…`. */
+/** Escapes `raw` for Slack mrkdwn. When the result has more than `max` characters, Oceania cuts it and adds `…`. */
 export function mrkdwn(raw: string, max = Infinity): string {
   const escape = (s: string) => s.replace(/[&<>]/g, (c) => ENTITIES[c])
   const text = escape(raw)
@@ -47,10 +47,10 @@ ${diff}`)
 
 /** Deny reason while a session is paused (spec §7.6). `author` is the spec author's name. `channel` has no `#`. */
 export function paused(question: string, author: string, channel: string): string {
-  return clip(`Tower paused this session.
+  return clip(`Oceania paused this session.
 Open question: ${question}
 ${author} decides in Slack channel #${channel}.
-End your turn now. Tower starts your next turn with the decision.`)
+End your turn now. Oceania starts your next turn with the decision.`)
 }
 
 /** Stop reason after a decision, without pending notes (spec §7.6). `author` is the spec author's name. */
@@ -62,12 +62,12 @@ Apply this decision. Then continue your task.`)
 /** GitHub issue comment that records a decision (spec §7.6). `authorGithub` is a login without `@`. */
 export function decisionComment(option: string, authorGithub: string): string {
   return clip(`Decision: ${option}
-@${authorGithub} decided this in Slack. Tower recorded this decision.`)
+@${authorGithub} decided this in Slack. Oceania recorded this decision.`)
 }
 
-/** Tower note to one session (spec §7.5). */
+/** Oceania note to one session (spec §7.5). */
 export function note(summary: string, instruction: string): string {
-  return clip(`Tower note: ${summary}
+  return clip(`Oceania note: ${summary}
 Do this: ${instruction}`)
 }
 
@@ -75,11 +75,11 @@ Do this: ${instruction}`)
 export function teamStatus(s: Snapshot, viewer: string): string {
   const sessions = s.sessions.filter((v) => v.id !== viewer)
   const open = s.conflicts.filter((c) => c.status === 'open')
-  if (!sessions.length && !open.length) return clip('Tower: no other agents are active.')
+  if (!sessions.length && !open.length) return clip('Oceania: no other agents are active.')
   const name = (github: string) => s.members.find((m) => m.github === github)?.name ?? github
   return clip(
     [
-      'Tower: team status.',
+      'Oceania: team status.',
       ...sessions.map((v) => {
         const task = v.task?.summary.trim().replace(/\.$/, '') ?? 'no task'
         return `- ${who(v.name, v.agent)}, ${v.status}: ${task}. Files: ${v.files.join(', ') || 'none'}.`
@@ -90,7 +90,7 @@ export function teamStatus(s: Snapshot, viewer: string): string {
   )
 }
 
-/** A text that Tower sends to an agent, and the notes in that text. Tower sends the other notes later. */
+/** A text that Oceania sends to an agent, and the notes in that text. Oceania sends the other notes later. */
 export interface Delivery<T> {
   text: T
   sent: Note[]
@@ -123,9 +123,9 @@ export function pending(notes: Note[]): Delivery<string> {
 }
 
 /** PostToolUse context: the note texts, then one line per event. The text is undefined when both are empty. */
-export function updates(events: TowerEvent[], notes: Note[]): Delivery<string | undefined> {
+export function updates(events: OceaniaEvent[], notes: Note[]): Delivery<string | undefined> {
   if (!events.length && !notes.length) return { text: undefined, sent: [] }
-  const head = ['Tower updates:']
+  const head = ['Oceania updates:']
   const sent = fit(notes, head)
   return { text: clip([...head, ...sent.map((n) => n.text), ...events.map((e) => `- ${e.text}`)].join('\n')), sent }
 }

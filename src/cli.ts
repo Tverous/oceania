@@ -1,6 +1,6 @@
 import { parseArgs } from 'node:util'
 
-// Each subcommand loads its own modules, so `tower hook` loads only Node built-in modules.
+// Each subcommand loads its own modules, so `oceania hook` loads only Node built-in modules.
 const { positionals, values } = parseArgs({ allowPositionals: true, options: { agent: { type: 'string' } } })
 const [command] = positionals
 
@@ -22,10 +22,10 @@ if (command === 'hook' && (values.agent === 'copilot' || values.agent === 'claud
     return value
   }
 
-  const memory = new Memory('tower.db')
+  const memory = new Memory('oceania.db')
   for (const member of JSON.parse(readFileSync('members.json', 'utf8'))) memory.upsertMember(member)
 
-  // Print each new event, so the team can see what Tower does.
+  // Print each new event, so the team can see what Oceania does.
   let last = memory.lastEventId()
   memory.onChange(() => {
     for (const event of memory.eventsAfter(last)) {
@@ -34,10 +34,10 @@ if (command === 'hook' && (values.agent === 'copilot' || values.agent === 'claud
     }
   })
 
-  const specs = ghSpecs(env('TOWER_REPO'))
+  const specs = ghSpecs(env('OCEANIA_REPO'))
   const chat = await startSlack(memory, specs, { bot: env('SLACK_BOT_TOKEN'), app: env('SLACK_APP_TOKEN') })
-  // The clone for check_merge. Tower clones the repo of the first session that reports git data.
-  const shadow = new Shadow('.tower/repo')
+  // The clone for check_merge. Oceania clones the repo of the first session that reports git data.
+  const shadow = new Shadow('.oceania/repo')
   const master = startMaster(memory, createTools(memory, chat, specs, shadow), claudeJudge)
   const server = createServer(memory, {
     settled: master.settled,
@@ -45,9 +45,9 @@ if (command === 'hook' && (values.agent === 'copilot' || values.agent === 'claud
     observed: (id, git) => void shadow.update(id, git),
   })
   server.listen(4100, '127.0.0.1', () => {
-    console.log('Tower is ready at http://127.0.0.1:4100.')
+    console.log('Oceania is ready at http://127.0.0.1:4100.')
   })
 } else {
-  console.error('Usage: tower serve | tower hook --agent <copilot|claude>')
+  console.error('Usage: oceania serve | oceania hook --agent <copilot|claude>')
   process.exitCode = 1
 }

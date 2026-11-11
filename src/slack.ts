@@ -8,10 +8,10 @@ import { mrkdwn, who } from './text.ts'
 import { STAGE_LABELS } from './types.ts'
 import type { Member } from './types.ts'
 
-/** Wait after a change in Memory before Tower updates the boards. */
+/** Wait after a change in Memory before Oceania updates the boards. */
 const BOARD_DEBOUNCE_MS = 1_000
-/** The shared channel (spec §7.1). Slack does not let a channel use the name of a user, and the bot user is `tower`. */
-const SHARED = 'tower-activity'
+/** The shared channel (spec §7.1). Slack does not let a channel use the name of a user, and the bot user is `oceania`. */
+const SHARED = 'oceania-activity'
 /**
  * Most characters for one text from Memory. A section has at most two such texts and short labels,
  * so it stays within the Slack limit of 3,000 characters for one text.
@@ -19,7 +19,7 @@ const SHARED = 'tower-activity'
 const FIELD = 1_000
 
 /**
- * Connects Tower to Slack in Socket Mode: the shared channel, the conflict channels, the decision buttons,
+ * Connects Oceania to Slack in Socket Mode: the shared channel, the conflict channels, the decision buttons,
  * and the board in App Home (spec §7.6, §7.10). Tests give a fake `app`.
  */
 export async function startSlack(
@@ -52,7 +52,7 @@ export async function startSlack(
       cursor = page.response_metadata?.next_cursor
     } while (cursor)
     throw new Error(
-      `Tower cannot find the public channel #${SHARED}. A private channel, an archived channel, a user, or a user group uses this name.`,
+      `Oceania cannot find the public channel #${SHARED}. A private channel, an archived channel, a user, or a user group uses this name.`,
     )
   }
 
@@ -71,7 +71,7 @@ export async function startSlack(
 
   app.action<BlockAction<ButtonAction>>(/^decide-\d+$/, async ({ ack, action, body }) => {
     await ack()
-    // Tower puts the buttons only in conflict channel messages, with the channel name as the value.
+    // Oceania puts the buttons only in conflict channel messages, with the channel name as the value.
     const { channel, message, user } = body
     if (!channel || !message || action.value === undefined) return
     const result = await decide(memory, specs, action.value, Number(action.action_id.slice('decide-'.length)), user.id)
@@ -86,7 +86,7 @@ export async function startSlack(
   })
 
   // The first change starts the timer, so a stream of changes cannot delay the board.
-  // Most hooks do not change the board. Tower publishes only a changed board, so the board calls
+  // Most hooks do not change the board. Oceania publishes only a changed board, so the board calls
   // do not fill the Slack queue that the conflict and decision calls also use.
   let board: NodeJS.Timeout | undefined
   memory.onChange(() => {
@@ -97,7 +97,7 @@ export async function startSlack(
       for (const { slackId } of memory.members()) {
         if (!slackId || published.get(slackId) === json) continue
         publish(slackId, view, json).catch((error) => {
-          console.error('Tower: the board update failed.', error)
+          console.error('Oceania: the board update failed.', error)
         })
       }
     }, BOARD_DEBOUNCE_MS)

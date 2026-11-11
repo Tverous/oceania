@@ -25,7 +25,7 @@ function git(cwd: string, ...args: string[]): string {
 }
 
 function tempDir(t: TestContext): string {
-  const dir = mkdtempSync(join(tmpdir(), 'tower-git-'))
+  const dir = mkdtempSync(join(tmpdir(), 'oceania-git-'))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
   return dir
 }

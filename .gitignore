@@ -1,6 +1,6 @@
 node_modules/
 .env
 members.json
-tower.db*
+oceania.db*
 .DS_Store
-.tower/
+.oceania/

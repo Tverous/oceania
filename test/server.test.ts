@@ -14,7 +14,7 @@ const BOB = 'bob@example.com'
 const REPO = 'github.com/tverous/acme-pricing'
 /** a2 is a second session of Alice in the same clone, for example after a restart. */
 const ROOTS: Record<string, string> = { a: '/work/alice', a2: '/work/alice', b: '/work/bob', c: '/work/carol' }
-const CHANNEL = 'tower-1-x'
+const CHANNEL = 'oceania-1-x'
 const OPTS = { settled: async () => {}, holdMs: 500 }
 
 function patch(path: string, line: string): string {
@@ -85,7 +85,7 @@ function decide(m: Memory): void {
 test('SessionStart registers and returns team status', async () => {
   const m = setup()
   const d = await hook(m, 'a', { hook_event_name: 'SessionStart' }, git('a'))
-  assert.match(d.context ?? '', /^Tower:/)
+  assert.match(d.context ?? '', /^Oceania:/)
   assert.equal(m.session('a')?.agent, 'Copilot CLI')
   assert.equal(m.session('a')?.repo, REPO)
 })
@@ -156,7 +156,7 @@ test('PreToolUse reads paths from a Copilot patch', async () => {
 test('UserPromptSubmit skips the Stop reason', async () => {
   const m = setup()
   await hook(m, 'a', { hook_event_name: 'SessionStart' }, git('a'))
-  m.addNote('a', 'Tower note: S\nDo this: I', false)
+  m.addNote('a', 'Oceania note: S\nDo this: I', false)
   const { block } = await hook(m, 'a', { hook_event_name: 'Stop' })
   const last = m.lastEventId()
   await hook(m, 'a', { hook_event_name: 'UserPromptSubmit', prompt: block })
@@ -169,16 +169,16 @@ test('PreToolUse denies every tool while paused', async () => {
   const m = setup()
   await escalated(m)
   const d = await hook(m, 'a', { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'ls' } })
-  assert.match(d.deny ?? '', /^Tower paused this session\.\n/)
-  assert.match(d.deny ?? '', /Tverous decides in Slack channel #tower-1-x\./)
+  assert.match(d.deny ?? '', /^Oceania paused this session\.\n/)
+  assert.match(d.deny ?? '', /Tverous decides in Slack channel #oceania-1-x\./)
 })
 
 test('PreToolUse delivers a blocking note once', async () => {
   const m = setup()
   await hook(m, 'b', { hook_event_name: 'SessionStart' }, git('b'))
-  m.addNote('b', 'Tower note: S\nDo this: I', true)
+  m.addNote('b', 'Oceania note: S\nDo this: I', true)
   const read = { hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: 'src/plans.ts' } }
-  assert.deepEqual(await hook(m, 'b', read), { deny: 'Tower note: S\nDo this: I' })
+  assert.deepEqual(await hook(m, 'b', read), { deny: 'Oceania note: S\nDo this: I' })
   assert.deepEqual(await hook(m, 'b', read), {})
 })
 
@@ -186,12 +186,12 @@ test('PostToolUse stores the diff and returns updates', async () => {
   const m = setup()
   await hook(m, 'a', { hook_event_name: 'SessionStart' }, git('a'))
   await hook(m, 'b', { hook_event_name: 'UserPromptSubmit', prompt: 'Show the Pro plan.' })
-  m.addNote('a', 'Tower note: S\nDo this: I', false)
+  m.addNote('a', 'Oceania note: S\nDo this: I', false)
   const d = await hook(m, 'a', { hook_event_name: 'PostToolUse' }, git('a', ['src/plans.ts'], patch('src/plans.ts', '// Pro')))
   assert.deepEqual(m.diffs().map((x) => [x.session, x.files]), [['a', ['src/plans.ts']]])
-  assert.match(d.context ?? '', /^Tower updates:\n/)
+  assert.match(d.context ?? '', /^Oceania updates:\n/)
   assert.match(d.context ?? '', /Bob's agent \(Claude Code\) task: Show the Pro plan\./)
-  assert.match(d.context ?? '', /Tower note: S\nDo this: I/)
+  assert.match(d.context ?? '', /Oceania note: S\nDo this: I/)
   assert.deepEqual(await hook(m, 'a', { hook_event_name: 'PostToolUse' }, git('a', ['src/plans.ts'], patch('src/plans.ts', '// Pro'))), {})
 })
 
@@ -241,8 +241,8 @@ test('Stop waits for settled before it checks the pause', async () => {
 test('Stop blocks once for pending notes', async () => {
   const m = setup()
   await hook(m, 'a', { hook_event_name: 'SessionStart' }, git('a'))
-  m.addNote('a', 'Tower note: S\nDo this: I', false)
-  assert.deepEqual(await hook(m, 'a', { hook_event_name: 'Stop' }), { block: 'Tower note: S\nDo this: I' })
+  m.addNote('a', 'Oceania note: S\nDo this: I', false)
+  assert.deepEqual(await hook(m, 'a', { hook_event_name: 'Stop' }), { block: 'Oceania note: S\nDo this: I' })
   assert.equal(m.session('a')?.status, 'working')
   assert.deepEqual(await hook(m, 'a', { hook_event_name: 'Stop' }), {})
   assert.equal(m.session('a')?.status, 'idle')
@@ -254,7 +254,7 @@ test('deny text stays within MAX_TEXT', async () => {
   await hook(m, 'b', { hook_event_name: 'SessionStart' }, git('b'))
   const deny = (await hook(m, 'b', edit('src/plans.ts'), git('b'))).deny ?? ''
   assert.ok(Buffer.byteLength(deny) <= MAX_TEXT)
-  assert.ok(deny.endsWith('[Tower clipped this text.]'))
+  assert.ok(deny.endsWith('[Oceania clipped this text.]'))
 })
 
 test('createServer answers POST /hook and rejects other requests', async (t) => {
@@ -267,7 +267,7 @@ test('createServer answers POST /hook and rejects other requests', async (t) => 
 
   const ok = await fetch(`${url}/hook`, { method: 'POST', body: JSON.stringify(body) })
   assert.equal(ok.status, 200)
-  assert.match(((await ok.json()) as HookDecision).context ?? '', /^Tower:/)
+  assert.match(((await ok.json()) as HookDecision).context ?? '', /^Oceania:/)
   assert.equal((await fetch(`${url}/hook`, { method: 'POST', body: 'x' })).status, 400)
   assert.equal((await fetch(`${url}/other`, { method: 'POST', body: '{}' })).status, 404)
   assert.equal((await fetch(`${url}/hook`)).status, 404)
@@ -331,17 +331,17 @@ test('PostToolUse puts the notes before the events and keeps the notes that do n
   for (let i = 0; i < 100; i++) {
     await hook(m, 'b', { hook_event_name: 'UserPromptSubmit', prompt: `Task ${i}: ${'x'.repeat(100)}` })
   }
-  m.addNote('a', 'Tower note: S\nDo this: I', false)
+  m.addNote('a', 'Oceania note: S\nDo this: I', false)
   const { context = '' } = await hook(m, 'a', { hook_event_name: 'PostToolUse' }, git('a'))
-  assert.ok(context.startsWith('Tower updates:\nTower note: S\nDo this: I\n- '))
-  assert.ok(context.endsWith('[Tower clipped this text.]'))
+  assert.ok(context.startsWith('Oceania updates:\nOceania note: S\nDo this: I\n- '))
+  assert.ok(context.endsWith('[Oceania clipped this text.]'))
   assert.ok(Buffer.byteLength(context) <= MAX_TEXT)
 
   const long = (i: number) => note(`S${i}`, 'x'.repeat(5000))
   m.addNote('a', long(1), false)
   m.addNote('a', long(2), false)
-  assert.deepEqual(await hook(m, 'a', { hook_event_name: 'PostToolUse' }, git('a')), { context: `Tower updates:\n${long(1)}` })
-  assert.deepEqual(await hook(m, 'a', { hook_event_name: 'PostToolUse' }, git('a')), { context: `Tower updates:\n${long(2)}` })
+  assert.deepEqual(await hook(m, 'a', { hook_event_name: 'PostToolUse' }, git('a')), { context: `Oceania updates:\n${long(1)}` })
+  assert.deepEqual(await hook(m, 'a', { hook_event_name: 'PostToolUse' }, git('a')), { context: `Oceania updates:\n${long(2)}` })
   assert.deepEqual(await hook(m, 'a', { hook_event_name: 'PostToolUse' }, git('a')), {})
 })
 

@@ -1,9 +1,9 @@
 import { createSdkMcpServer, query, tool } from '@anthropic-ai/claude-agent-sdk/core'
 import type { Tools } from './master.ts'
 
-export const SYSTEM_PROMPT = `You are the master agent of Tower. Tower coordinates the AI agents of different team members. Each agent works in a session on the computer of its owner. All sessions share Tower Memory.
+export const SYSTEM_PROMPT = `You are the master agent of Oceania. Oceania coordinates the AI agents of different team members. Each agent works in a session on the computer of its owner. All sessions share Oceania Memory.
 
-Each round, Tower gives you the new events. Use the Tower tools to examine the work and to act. Session ids, conflict ids, and issue numbers come from read_memory.
+Each round, Oceania gives you the new events. Use the Oceania tools to examine the work and to act. Session ids, conflict ids, and issue numbers come from read_memory.
 
 Stages. The stage of a conflict shows where the conflicting changes are:
 - before: The changes do not exist yet. Only the tasks conflict.
@@ -35,19 +35,19 @@ Rules:
    - Set the conflict to resolved when main has the work of the later session.
 8. High impact: Call escalate one time for each conflict. Give 2 or 3 short options. Each option has 75 characters or less.
    - Write only the product terms in each option. Use few words. Do not write the names of members or agents in an option. Use the form of these examples: "30 days, no card" and "14 days, card required".
-9. After a decision: Tower sends the decision to the paused sessions. Do not send it again. Make sure that main gets the decision. If a change on main must change, use notify to give the fix to a session that still works.
+9. After a decision: Oceania sends the decision to the paused sessions. Do not send it again. Make sure that main gets the decision. If a change on main must change, use notify to give the fix to a session that still works.
 10. The pushes in read_memory show the changes that reached main. Set a high impact conflict to resolved only when a push shows that main has the decision. Until then, keep the conflict open.
 11. Do not call escalate for a conflict that the agents can solve.
 12. Do not write a note, a summary, or a question again if Memory already has it. The posts in read_memory show the summaries that you posted.
 13. If no action is necessary, stop.
 14. Write each note and each summary in ASD-STE100 Simplified Technical English. Use short sentences. Write one instruction in each sentence.`
 
-/** Runs one judge round with Claude Opus and the Tower tools (spec §7.8). `signal` stops the query. */
+/** Runs one judge round with Claude Opus and the Oceania tools (spec §7.8). `signal` stops the query. */
 export async function claudeJudge(prompt: string, tools: Tools, signal?: AbortSignal): Promise<void> {
   const abortController = new AbortController()
   signal?.addEventListener('abort', () => abortController.abort(signal.reason), { once: true })
   const server = createSdkMcpServer({
-    name: 'tower',
+    name: 'oceania',
     version: '0.1.0',
     alwaysLoad: true,
     tools: Object.entries(tools).map(([name, t]) =>
@@ -72,16 +72,16 @@ export async function claudeJudge(prompt: string, tools: Tools, signal?: AbortSi
       permissionMode: 'dontAsk',
       persistSession: false,
       maxTurns: 12,
-      mcpServers: { tower: server },
-      allowedTools: Object.keys(tools).map((name) => `mcp__tower__${name}`),
+      mcpServers: { oceania: server },
+      allowedTools: Object.keys(tools).map((name) => `mcp__oceania__${name}`),
     },
   })
   for await (const m of messages) {
-    if (m.type === 'system' && m.subtype === 'init') console.log(`Tower judge: model ${m.model}`)
+    if (m.type === 'system' && m.subtype === 'init') console.log(`Oceania judge: model ${m.model}`)
     if (m.type !== 'result') continue
     const text = m.subtype === 'success' ? m.result : m.errors.join(' ')
     console.log(
-      `Tower judge: ${m.subtype}, ${m.num_turns} turns, ${m.duration_ms} ms, $${m.total_cost_usd.toFixed(4)}. ${text}`,
+      `Oceania judge: ${m.subtype}, ${m.num_turns} turns, ${m.duration_ms} ms, $${m.total_cost_usd.toFixed(4)}. ${text}`,
     )
   }
 }

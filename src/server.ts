@@ -19,10 +19,10 @@ export const WRITE_TOOLS = ['Edit', 'Write', 'MultiEdit', 'NotebookEdit']
 /** A line of an apply_patch text that names a file that the patch writes. */
 const PATCH_PATH = /^\*\*\* (?:Add File|Update File|Delete File|Move to): (.+)$/gm
 
-/** For each Memory, the last Stop reason that Tower sent to each session. Copilot sends that reason back as a prompt. */
+/** For each Memory, the last Stop reason that Oceania sent to each session. Copilot sends that reason back as a prompt. */
 const lastBlock = new WeakMap<Memory, Map<string, string>>()
 
-/** The hook payload fields that Tower reads. Copilot with PascalCase events sends the same fields as Claude Code. */
+/** The hook payload fields that Oceania reads. Copilot with PascalCase events sends the same fields as Claude Code. */
 export interface HookPayload {
   hook_event_name: string
   session_id: string
@@ -44,7 +44,7 @@ export function writePaths(payload: HookPayload): string[] {
 
 export interface HookRequest {
   agent: AgentKind
-  /** Member email from `TOWER_MEMBER`. */
+  /** Member email from `OCEANIA_MEMBER`. */
   member: string
   payload: HookPayload
   git?: GitInfo
@@ -200,7 +200,7 @@ export function createServer(memory: Memory, opts: HookOptions): Server {
       res.writeHead(400).end()
       return
     }
-    // The agent can end the hook before Tower answers, for example when the user presses Esc.
+    // The agent can end the hook before Oceania answers, for example when the user presses Esc.
     const ended = new AbortController()
     res.on('close', () => {
       if (!res.writableFinished) ended.abort()

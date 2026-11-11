@@ -63,15 +63,15 @@ function highConflict(m: Memory, issue?: number): number {
 }
 
 /** These tests do not use check_merge, so the Shadow never clones. test/shadow.test.ts tests check_merge. */
-const shadow = new Shadow(join(tmpdir(), 'tower-unused-shadow'))
+const shadow = new Shadow(join(tmpdir(), 'oceania-unused-shadow'))
 
 const QUESTION = { question: 'Which trial terms?', options: ['14 days, card required', '30 days, no card'] }
 
-test('notify writes a Tower note', async () => {
+test('notify writes an Oceania note', async () => {
   const m = setup()
   const tools = createTools(m, fakeChat(m).chat, specs, shadow)
   await tools.notify.run({ session: 'b', summary: 'S', instruction: 'I', blocking: true })
-  assert.equal(m.takeNotes('b', true)[0].text, 'Tower note: S\nDo this: I')
+  assert.equal(m.takeNotes('b', true)[0].text, 'Oceania note: S\nDo this: I')
 })
 
 test('track_conflict creates and resolves a conflict', async () => {
@@ -124,7 +124,7 @@ test('escalate opens the Slack channel before it pauses sessions', async () => {
   const id = highConflict(m, 1)
   const result = await tools.escalate.run({ conflict: id, ...QUESTION })
   assert.equal(opened[0].author, 'Tverous')
-  assert.match(opened[0].channel ?? '', /^tower-1-[0-9a-z]+$/)
+  assert.match(opened[0].channel ?? '', /^oceania-1-[0-9a-z]+$/)
   assert.equal(result, `Opened #${opened[0].channel}`)
   assert.deepEqual(seen[0], ['idle', 'idle'])
   assert.equal(m.session('a')?.status, 'paused')

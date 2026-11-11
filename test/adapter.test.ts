@@ -11,13 +11,13 @@ import { createServer } from '../src/server.ts'
 const CLI = join(import.meta.dirname, '..', 'src', 'cli.ts')
 const ALICE = 'alice@example.com'
 
-/** Runs `tower hook` with `payload` on stdin. `env` replaces the Tower variables of this process. */
+/** Runs `oceania hook` with `payload` on stdin. `env` replaces the Oceania variables of this process. */
 function runHook(
   agent: string,
   payload: object,
-  env: { TOWER_URL?: string; TOWER_MEMBER?: string },
+  env: { OCEANIA_URL?: string; OCEANIA_MEMBER?: string },
 ): Promise<{ code: number | null; stdout: string }> {
-  const { TOWER_URL, TOWER_MEMBER, ...rest } = process.env
+  const { OCEANIA_URL, OCEANIA_MEMBER, ...rest } = process.env
   const child = spawn(process.execPath, [CLI, 'hook', '--agent', agent], { env: { ...rest, ...env } })
   let stdout = ''
   child.stdout.setEncoding('utf8').on('data', (chunk: string) => (stdout += chunk))
@@ -62,21 +62,21 @@ test('hookOutput returns undefined for an empty decision', () => {
   assert.equal(hookOutput('claude', 'PostToolUse', {}), undefined)
 })
 
-test('runHook stays silent when Tower is down', async (t) => {
-  const down = await runHook('copilot', payload('PreToolUse'), { TOWER_URL: 'http://127.0.0.1:9', TOWER_MEMBER: ALICE })
+test('runHook stays silent when Oceania is down', async (t) => {
+  const down = await runHook('copilot', payload('PreToolUse'), { OCEANIA_URL: 'http://127.0.0.1:9', OCEANIA_MEMBER: ALICE })
   assert.deepEqual(down, { code: 0, stdout: '' })
 
-  // Without TOWER_MEMBER, the adapter sends nothing, also to a Tower that runs.
+  // Without OCEANIA_MEMBER, the adapter sends nothing, also to an Oceania that runs.
   const m = new Memory(':memory:')
   const server = createServer(m, { settled: async () => {}, holdMs: 0 }).listen(0, '127.0.0.1')
   t.after(() => server.close())
   await new Promise((done) => server.once('listening', done))
   const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
-  assert.deepEqual(await runHook('copilot', payload('PreToolUse'), { TOWER_URL: url }), { code: 0, stdout: '' })
+  assert.deepEqual(await runHook('copilot', payload('PreToolUse'), { OCEANIA_URL: url }), { code: 0, stdout: '' })
   assert.equal(m.session('s1'), undefined)
 })
 
-test('runHook prints the Tower decision in the agent format', async (t) => {
+test('runHook prints the Oceania decision in the agent format', async (t) => {
   const m = new Memory(':memory:')
   m.upsertMember({ email: ALICE, name: 'Alice' })
   const server = createServer(m, { settled: async () => {}, holdMs: 0 }).listen(0, '127.0.0.1')
@@ -84,10 +84,10 @@ test('runHook prints the Tower decision in the agent format', async (t) => {
   await new Promise((done) => server.once('listening', done))
   const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
 
-  const { code, stdout } = await runHook('claude', payload('SessionStart'), { TOWER_URL: url, TOWER_MEMBER: ALICE })
+  const { code, stdout } = await runHook('claude', payload('SessionStart'), { OCEANIA_URL: url, OCEANIA_MEMBER: ALICE })
   assert.equal(code, 0)
   const out = JSON.parse(stdout)
   assert.equal(out.hookSpecificOutput.hookEventName, 'SessionStart')
-  assert.match(out.hookSpecificOutput.additionalContext, /^Tower:/)
+  assert.match(out.hookSpecificOutput.additionalContext, /^Oceania:/)
   assert.equal(m.session('s1')?.agent, 'Claude Code')
 })

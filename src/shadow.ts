@@ -9,19 +9,19 @@ import type { GitInfo } from './types.ts'
 /** Longest run of one git command, so that a stuck fetch does not stop the queue. */
 const GIT_TIMEOUT_MS = 60_000
 /**
- * Longest run of `npm test` in a merged worktree. It is half of ROUND_MS in master.ts, because Tower stops
+ * Longest run of `npm test` in a merged worktree. It is half of ROUND_MS in master.ts, because Oceania stops
  * a judge round after ROUND_MS. Thus the master agent gets the test result in the same round.
  */
 export const TEST_TIMEOUT_MS = 60_000
-/** The secrets in the .env of Tower. The tests run code from the agents, so they do not get these values. */
+/** The secrets in the .env of Oceania. The tests run code from the agents, so they do not get these values. */
 const SECRETS = ['ANTHROPIC_API_KEY', 'SLACK_BOT_TOKEN', 'SLACK_APP_TOKEN']
 
-/** The author and committer of shadow commits. Tower does not use the git config of the user for them. */
+/** The author and committer of shadow commits. Oceania does not use the git config of the user for them. */
 const IDENTITY = {
-  GIT_AUTHOR_NAME: 'Tower',
-  GIT_AUTHOR_EMAIL: 'tower@localhost',
-  GIT_COMMITTER_NAME: 'Tower',
-  GIT_COMMITTER_EMAIL: 'tower@localhost',
+  GIT_AUTHOR_NAME: 'Oceania',
+  GIT_AUTHOR_EMAIL: 'oceania@localhost',
+  GIT_COMMITTER_NAME: 'Oceania',
+  GIT_COMMITTER_EMAIL: 'oceania@localhost',
 }
 
 /** The HTTPS clone URL of a normalized repo: `github.com/o/r` becomes `https://github.com/o/r.git`. */
@@ -68,11 +68,11 @@ function git(
 }
 
 /**
- * Runs `npm test` in `cwd`, in a process group of its own. On a timeout, Tower kills the group,
+ * Runs `npm test` in `cwd`, in a process group of its own. On a timeout, Oceania kills the group,
  * so that no test process stays. `output` is stdout and stderr, at most about MAX_TEXT bytes.
  */
 function npmTest(cwd: string): Promise<{ code: number | null; output: string; timedOut: boolean }> {
-  // The tests are in a different package, so they do not get the npm values of the Tower process.
+  // The tests are in a different package, so they do not get the npm values of the Oceania process.
   const env: NodeJS.ProcessEnv = { npm_config_update_notifier: 'false' }
   for (const [name, value] of Object.entries(process.env)) {
     if (!/^npm_/i.test(name) && !SECRETS.includes(name)) env[name] = value
@@ -103,7 +103,7 @@ function npmTest(cwd: string): Promise<{ code: number | null; output: string; ti
       clearTimeout(timer)
       fail(error)
     })
-    // A test can start a process that does not stop, for example a server. When npm stops, Tower kills it,
+    // A test can start a process that does not stop, for example a server. When npm stops, Oceania kills it,
     // so that its open stdout does not keep `close` from coming.
     child.on('exit', kill)
     child.on('close', (code) => {
@@ -114,7 +114,7 @@ function npmTest(cwd: string): Promise<{ code: number | null; output: string; ti
 }
 
 /**
- * Shadow refs (spec §10, P1): Tower keeps a bare clone of the repo, and `refs/tower/<session>` in it
+ * Shadow refs (spec §10, P1): Oceania keeps a bare clone of the repo, and `refs/oceania/<session>` in it
  * is the base commit of the session with the session diff on top. With these refs, `git merge-tree`
  * merges the work of two sessions before they push. All git work runs in one queue, in the background.
  */
@@ -136,8 +136,8 @@ export class Shadow {
   }
 
   /**
-   * Points `refs/tower/<session>` at `base` with `patch` on top. An empty patch points the ref at `base`.
-   * The result never rejects: Tower logs the errors, because this runs after a hook.
+   * Points `refs/oceania/<session>` at `base` with `patch` on top. An empty patch points the ref at `base`.
+   * The result never rejects: Oceania logs the errors, because this runs after a hook.
    */
   update(session: string, git: ShadowInput): Promise<void> {
     this.#next.set(session, git)
@@ -151,10 +151,10 @@ export class Shadow {
       } catch (error) {
         // An old ref gives a wrong merge result, so remove it. For example, git apply cannot apply a binary diff.
         this.#written.delete(session)
-        await this.#git(['update-ref', '-d', `refs/tower/${session}`]).catch(() => {})
+        await this.#git(['update-ref', '-d', `refs/oceania/${session}`]).catch(() => {})
         throw error
       }
-    }).catch((error) => console.error(`Tower: the shadow ref of session ${session} failed.`, error))
+    }).catch((error) => console.error(`Oceania: the shadow ref of session ${session} failed.`, error))
   }
 
   /** Merges the shadow refs of sessions `a` and `b` with `git merge-tree`. No work tree changes. */
@@ -164,17 +164,17 @@ export class Shadow {
 
   /**
    * Merges the shadow refs of sessions `a` and `b`. If the merge has no conflicts, checks out the merged tree
-   * in a temporary worktree and runs `npm test` there. Tower always removes the worktree.
+   * in a temporary worktree and runs `npm test` there. Oceania always removes the worktree.
    */
   async test(a: string, b: string): Promise<TestResult> {
-    const tmp = await mkdtemp(join(tmpdir(), 'tower-worktree-'))
+    const tmp = await mkdtemp(join(tmpdir(), 'oceania-worktree-'))
     const work = join(tmp, 'work')
     try {
       const merged = await this.#serial(async () => {
         const result = await this.#merge(a, b)
         if (result.status !== 'clean') return result
-        const parents = ['-p', `refs/tower/${a}`, '-p', `refs/tower/${b}`]
-        const message = `Tower merge of sessions ${a} and ${b}`
+        const parents = ['-p', `refs/oceania/${a}`, '-p', `refs/oceania/${b}`]
+        const message = `Oceania merge of sessions ${a} and ${b}`
         const commit = await this.#git(['commit-tree', '--no-gpg-sign', ...parents, '-m', message, result.tree])
         await this.#git(['worktree', 'add', '--detach', '--quiet', work, commit.stdout.trim()])
         return result
@@ -193,7 +193,7 @@ export class Shadow {
       // `git worktree prune` removes the data of the deleted worktree from the clone.
       if (existsSync(this.dir)) {
         await this.#serial(() => this.#git(['worktree', 'prune'])).catch((error) => {
-          console.error('Tower: git worktree prune failed.', error)
+          console.error('Oceania: git worktree prune failed.', error)
         })
       }
     }
@@ -208,10 +208,10 @@ export class Shadow {
 
   async #merge(a: string, b: string): Promise<MergeResult> {
     for (const session of [a, b]) {
-      if (!existsSync(this.dir) || !(await this.#has(`refs/tower/${session}`))) return { status: 'missing', session }
+      if (!existsSync(this.dir) || !(await this.#has(`refs/oceania/${session}`))) return { status: 'missing', session }
     }
     const args = ['-c', 'core.quotePath=false', 'merge-tree', '--write-tree', '--name-only']
-    const { code, stdout } = await this.#git([...args, `refs/tower/${a}`, `refs/tower/${b}`], { ok: [1] })
+    const { code, stdout } = await this.#git([...args, `refs/oceania/${a}`, `refs/oceania/${b}`], { ok: [1] })
     // The output is the tree, then on a conflict one line for each file, then an empty line and messages.
     const [tree, ...lines] = stdout.split('\n')
     if (code === 0) return { status: 'clean', tree }
@@ -228,19 +228,19 @@ export class Shadow {
     if (!(await this.#has(`${base}^{commit}`))) await this.#git(['fetch', '--quiet', 'origin'])
     let commit = base
     if (patch) {
-      const tmp = await mkdtemp(join(tmpdir(), 'tower-shadow-'))
+      const tmp = await mkdtemp(join(tmpdir(), 'oceania-shadow-'))
       try {
         const env = { GIT_INDEX_FILE: join(tmp, 'index') }
         await this.#git(['read-tree', base], { env })
         await this.#git(['apply', '--cached', '--whitespace=nowarn'], { env, input: patch })
         const tree = (await this.#git(['write-tree'], { env })).stdout.trim()
-        const message = `Tower shadow of session ${session}`
+        const message = `Oceania shadow of session ${session}`
         commit = (await this.#git(['commit-tree', '--no-gpg-sign', '-p', base, '-m', message, tree])).stdout.trim()
       } finally {
         await rm(tmp, { recursive: true, force: true })
       }
     }
-    await this.#git(['update-ref', `refs/tower/${session}`, commit])
+    await this.#git(['update-ref', `refs/oceania/${session}`, commit])
     this.#written.set(session, key)
   }
 

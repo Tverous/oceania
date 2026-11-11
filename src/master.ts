@@ -4,13 +4,13 @@ import type { Memory } from './memory.ts'
 import { TEST_TIMEOUT_MS } from './shadow.ts'
 import type { Shadow } from './shadow.ts'
 import { clip, decisionComment, note, resume } from './text.ts'
-import type { Conflict, EventKind, Spec, TowerEvent } from './types.ts'
+import type { Conflict, EventKind, Spec, OceaniaEvent } from './types.ts'
 
 /** Wait after a change in Memory before a round, so that one round handles a batch of events. */
 export const DEBOUNCE_MS = 1_500
 /** Longest wait of `settled()`. */
 export const SETTLE_MS = 90_000
-/** Longest judge round. Then Tower stops the round, so that a stuck tool call does not block the next rounds. */
+/** Longest judge round. Then Oceania stops the round, so that a stuck tool call does not block the next rounds. */
 export const ROUND_MS = 120_000
 /** Interval of the deterministic check (spec §7.4). */
 export const RESYNC_MS = 60_000
@@ -59,7 +59,7 @@ export function createTools(memory: Memory, chat: Chat, specs: Specs, shadow: Sh
   return {
     read_memory: define({
       description:
-        'Read Tower Memory: members, sessions, tasks, diffs, main, conflicts, notes, decisions, and the last 200 events. ' +
+        'Read Oceania Memory: members, sessions, tasks, diffs, main, conflicts, notes, decisions, and the last 200 events. ' +
         `pushes: the last ${LAST_PUSHES} pushes, with the changes that reached main. ` +
         `posts: the last ${LAST_POSTS} summaries that you posted with post_activity.`,
       schema: {},
@@ -102,7 +102,7 @@ export function createTools(memory: Memory, chat: Chat, specs: Specs, shadow: Sh
     }),
     notify: define({
       description:
-        'Write a Tower note to one session. Tower gives the note to the agent at its next tool call. ' +
+        'Write an Oceania note to one session. Oceania gives the note to the agent at its next tool call. ' +
         'A blocking note stops that tool call and shows the note.',
       schema: {
         session,
@@ -113,7 +113,7 @@ export function createTools(memory: Memory, chat: Chat, specs: Specs, shadow: Sh
       async run({ session, summary, instruction, blocking }) {
         need(session)
         memory.addNote(session, note(summary, instruction), blocking)
-        return `Tower wrote a note to session ${session}.`
+        return `Oceania wrote a note to session ${session}.`
       },
     }),
     post_activity: define({
@@ -122,13 +122,13 @@ export function createTools(memory: Memory, chat: Chat, specs: Specs, shadow: Sh
       async run({ text }) {
         await chat.post(text)
         memory.addPost(text)
-        return 'Tower posted the summary.'
+        return 'Oceania posted the summary.'
       },
     }),
     escalate: define({
       description:
-        'Give a high impact conflict to the spec author. Tower opens a Slack channel with the question ' +
-        'and one button for each option. Then Tower pauses the sessions in the conflict.',
+        'Give a high impact conflict to the spec author. Oceania opens a Slack channel with the question ' +
+        'and one button for each option. Then Oceania pauses the sessions in the conflict.',
       schema: {
         conflict: z.number().int().describe('Conflict id. The conflict must have an issue.'),
         question: z.string(),
@@ -143,9 +143,9 @@ export function createTools(memory: Memory, chat: Chat, specs: Specs, shadow: Sh
         if (conflict.channel) throw new Error(`Conflict #${id} is already in #${conflict.channel}.`)
         const { author } = await specs.get(conflict.issue)
         const member = memory.memberByGithub(author)
-        if (!member) throw new Error(`The spec author ${author} is not a Tower member.`)
+        if (!member) throw new Error(`The spec author ${author} is not an Oceania member.`)
         if (!member.slackId) throw new Error(`The spec author ${member.name} has no Slack user.`)
-        const channel = `tower-${conflict.issue}-${Date.now().toString(36)}`
+        const channel = `oceania-${conflict.issue}-${Date.now().toString(36)}`
         await chat.openConflict({ ...conflict, channel, author, question, options })
         memory.escalate(id, { channel, author, question, options })
         return `Opened #${channel}`
@@ -169,7 +169,7 @@ export function createTools(memory: Memory, chat: Chat, specs: Specs, shadow: Sh
       description:
         'Merge the diffs of two sessions in the same repo. Then run npm test on the merged code in a temporary ' +
         'git worktree. Use it to find a change in one diff that breaks the code in the other diff. ' +
-        `Tower stops the tests after ${TEST_TIMEOUT_MS / 1000} seconds.`,
+        `Oceania stops the tests after ${TEST_TIMEOUT_MS / 1000} seconds.`,
       schema: { a: session, b: session },
       async run({ a, b }) {
         need(a)
@@ -180,9 +180,9 @@ export function createTools(memory: Memory, chat: Chat, specs: Specs, shadow: Sh
           case 'missing':
             return `Session ${result.session} has no shadow ref yet.`
           case 'conflict':
-            return `The diffs of sessions ${a} and ${b} conflict in: ${result.files.join(', ')}. Tower did not run the tests.`
+            return `The diffs of sessions ${a} and ${b} conflict in: ${result.files.join(', ')}. Oceania did not run the tests.`
           case 'untested':
-            return 'The repo has no test command: package.json has no "test" script. Tower did not run tests.'
+            return 'The repo has no test command: package.json has no "test" script. Oceania did not run tests.'
           case 'passed':
             return `npm test passed on ${merged}.`
           case 'failed':
@@ -190,7 +190,7 @@ export function createTools(memory: Memory, chat: Chat, specs: Specs, shadow: Sh
           case 'timeout':
             return clip(
               `npm test did not stop in ${TEST_TIMEOUT_MS / 1000} seconds on ${merged}. ` +
-                `Tower stopped it. The output is below.\n${result.output}`,
+                `Oceania stopped it. The output is below.\n${result.output}`,
             )
         }
       },
@@ -199,9 +199,9 @@ export function createTools(memory: Memory, chat: Chat, specs: Specs, shadow: Sh
 }
 
 /** The prompt of one round: the events after the last round. */
-export function roundPrompt(events: TowerEvent[]): string {
+export function roundPrompt(events: OceaniaEvent[]): string {
   return [
-    'Tower events after the last round:',
+    'Oceania events after the last round:',
     ...events.map((e) => `- [${e.kind}${e.session ? `, session ${e.session}` : ''}] ${e.text}`),
     'Read Memory. Then apply the rules to these events and to each open conflict.',
   ].join('\n')
@@ -247,17 +247,17 @@ export function startMaster(
     cursor = events.at(-1)?.id ?? cursor
     const abort = new AbortController()
     const limit = setTimeout(
-      () => abort.abort(new Error(`The judge round took more than ${roundMs} ms. Tower stopped it.`)),
+      () => abort.abort(new Error(`The judge round took more than ${roundMs} ms. Oceania stopped it.`)),
       roundMs,
     )
-    // Tower does not wait for a judge that does not stop after the abort.
+    // Oceania does not wait for a judge that does not stop after the abort.
     const aborted = new Promise<never>((_, reject) => {
       abort.signal.addEventListener('abort', () => reject(abort.signal.reason), { once: true })
     })
     try {
       await Promise.race([judge(roundPrompt(events), tools, abort.signal), aborted])
     } catch (error) {
-      console.error('Tower: the judge round failed.', error)
+      console.error('Oceania: the judge round failed.', error)
     } finally {
       clearTimeout(limit)
     }
@@ -271,7 +271,7 @@ export function startMaster(
     try {
       memory.reportStalls(Date.now() - STALL_MS)
     } catch (error) {
-      console.error('Tower: the resync check failed.', error)
+      console.error('Oceania: the resync check failed.', error)
     }
   }, resyncMs).unref()
   return {
@@ -325,7 +325,7 @@ export async function decide(
   try {
     await specs.comment(issue, decisionComment(option, github))
   } catch (error) {
-    console.error(`Tower: the decision comment on #${issue} failed. The decision stays.`, error)
+    console.error(`Oceania: the decision comment on #${issue} failed. The decision stays.`, error)
   }
   return { ok: true, option }
 }

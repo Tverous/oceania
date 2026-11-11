@@ -35,7 +35,7 @@ export function gitInfo(cwd: string, withDiff: boolean): GitInfo | undefined {
     if (!withDiff) return { root, repo, base, main, files: [], patch: '' }
 
     // A copy of the index keeps the agent's own index unchanged.
-    const dir = mkdtempSync(join(tmpdir(), 'tower-index-'))
+    const dir = mkdtempSync(join(tmpdir(), 'oceania-index-'))
     try {
       const env = { ...process.env, GIT_INDEX_FILE: join(dir, 'index') }
       copyFileSync(resolve(cwd, git(['rev-parse', '--git-path', 'index']).trim()), env.GIT_INDEX_FILE)

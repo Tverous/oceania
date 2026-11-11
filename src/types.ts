@@ -106,12 +106,12 @@ export interface Post {
   at: number
 }
 
-export interface TowerEvent {
+export interface OceaniaEvent {
   id: number
   kind: EventKind
   session?: string
   text: string
-  /** Epoch ms when Tower added the event. */
+  /** Epoch ms when Oceania added the event. */
   at: number
 }
 
