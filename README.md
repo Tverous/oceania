@@ -144,13 +144,15 @@ The other computer sets `OCEANIA_URL` to the tailnet HTTPS URL, for example `htt
 
 The demo repo has `src/plans.ts` (the plans), `src/pricing.ts` (writes `pricing.html`), and `AGENTS.md` (pull first, commit and push when done, rebase before push). Issue #1 says: "Launch a Pro plan with a free trial. Add the plan and show it on the pricing page." It does not say the trial length or if a card is necessary.
 
-1. Alice (Copilot CLI): `Add the Pro plan from #1 to src/plans.ts: 14-day trial, card required.`
-2. About 10 seconds later, Bob (Claude Code): `Show the Pro plan from #1 on the pricing page. Use a 30-day free trial with no card.`
-3. **Conflict A (high impact).** The tasks disagree on the trial terms, and the spec does not say them. Oceania opens a Slack conflict channel with the question and the options, and pauses both agents.
-4. The spec author clicks "30 days, no card". Oceania records the decision on issue #1 and resumes both agents with it.
-5. **Conflict B (low impact, during).** Bob's agent tries to add the Pro plan to `src/plans.ts` too. The live check denies the write and sends Alice's diff. Bob's agent changes only `src/pricing.ts`. The master agent posts a summary in `#oceania-activity`.
-6. **Conflict B (after).** Alice's agent pushes. Oceania detects the push. The master agent tells Bob's agent to rebase on main before it pushes. Bob's agent pushes, and both conflicts become resolved.
-7. The App Home board shows both sessions and both conflicts. `node src/pricing.ts` on main shows the Pro plan with a 30-day trial and no card.
+Alice uses Copilot CLI and Bob uses Claude Code. Each engineer keeps one agent session and sends one task in each round. Bob's agent runs on laptop B. The spec author operates it from laptop A with `ssh` over the tailnet, so the screen of laptop A shows both agents and the Oceania feed.
+
+1. **Round 1, different requirements.** Alice: `Add a yearly price to each plan in src/plans.ts. The yearly price is 10 times the monthly price.` About 10 seconds later, Bob: `Add a short FAQ section below the plan table on the pricing page.` Each agent gets the task and the push of the other agent from Oceania. The files are different, so there is no conflict. The second agent to push rebases first.
+2. **Round 2, the same spec read two ways.** Alice: `Add the Pro plan from #1 to src/plans.ts: 14-day trial, card required.` Bob: `Show the Pro plan from #1 on the pricing page. Use a 30-day free trial with no card.`
+   - **Conflict A (before, high impact).** The trial terms disagree, and the spec does not say them. Oceania opens a Slack conflict channel with the question and the options, and pauses both agents.
+   - **Conflict B (before, low impact).** Bob's page needs the Pro plan that Alice adds. A note tells Bob's agent to use her plan data.
+   - The spec author clicks "30 days, no card". Oceania records the decision on issue #1 and resumes both agents with it. Conflict A becomes resolved only after a push shows that main has the decision.
+3. **Round 3, the same file at the same time.** Alice: `Show the yearly price next to the monthly price on the pricing page.` Bob: `Mark the Pro plan as Most popular on the pricing page.` Both change `src/pricing.ts`. The live check denies Bob's write and sends Alice's diff (during). After one agent pushes, the other agent is told to pull with rebase (after). All conflicts become resolved.
+4. The App Home board shows both agents and the lifecycle of each conflict. `node src/pricing.ts` on main shows the Pro plan (30-day free trial, no card, Most popular) with monthly and yearly prices and the FAQ.
 
 `scripts/reset-demo.sh` resets the demo clones, the Memory, and the decision comments.
 

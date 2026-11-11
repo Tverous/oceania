@@ -525,64 +525,115 @@ Launch a Pro plan with a free trial. Add the plan and show it on the pricing pag
 
 這份 spec 刻意不寫試用天數，也不寫是否需要信用卡。
 
-1. **工程師 Alice 在筆電 A 使用 Copilot CLI，送出以下任務：**
+角色：
+
+- Tverous 扮演 spec 作者。Tverous 撰寫 issue #1，並在 Slack 決定。
+- 參賽團隊的另外兩個人扮演 Alice 與 Bob。三個人都需要 Slack workspace 帳號，因為 Oceania 會邀請 Alice 與 Bob 進入衝突頻道。
+- Alice 在筆電 A 使用 GitHub Copilot CLI。Bob 使用 Anthropic Claude Code。
+- 每位工程師只開一個 agent session。每一輪，工程師在同一個 session 中送出一則新任務。
+- Bob 的 agent 在筆電 B 上執行。Tverous 在筆電 A 用 `ssh` 透過 tailnet 連到筆電 B，並在這個 SSH session 中替 Bob 輸入任務。
+- 因此筆電 A 的畫面同時顯示兩個 agent，而兩個 agent 在兩台電腦上執行。參賽團隊只錄製筆電 A 的螢幕。
+- 筆電 B 沒有準備好時，Bob 的 agent 改在筆電 A 的 `bob/` clone 上執行。Bob 的 hook 仍然透過 tailnet 的 HTTPS 網址連到 Oceania。
+- 英文：Tverous 的 Copilot 記憶有一條「用繁體中文回覆」的偏好。Copilot CLI 在互動模式會讀取記憶。因此錄影前，Tverous 在 Copilot CLI 執行 `/memory off`。錄影後，Tverous 執行 `/memory on`。
+
+demo 有三輪。每一輪，Alice 先送出任務。大約 10 秒後，Bob 送出任務。
+
+### 第 1 輪：不同的需求
+
+這一輪不需要成員決定。
+
+1. **Alice 送出以下任務：**
+
+   ```text
+   Add a yearly price to each plan in src/plans.ts. The yearly price is 10 times the monthly price.
+   ```
+
+2. **Bob 送出以下任務：**
+
+   ```text
+   Add a short FAQ section below the plan table on the pricing page.
+   ```
+
+3. **預期結果：**
+   - 每個 agent 從 Oceania 收到另一個 agent 的任務與推送。
+   - 兩個任務修改不同的檔案。因此沒有衝突，或最多只有一則影響小的通知。
+   - 兩個 agent 都推送到 main。第二個推送的 agent 先用 rebase 合併 main（`AGENTS.md`）。
+
+### 第 2 輪：同一份 spec 的兩種解讀
+
+1. **Alice 送出以下任務：**
 
    ```text
    Add the Pro plan from #1 to src/plans.ts: 14-day trial, card required.
    ```
 
-2. **工程師 Bob 在筆電 B 使用 Claude Code。大約 10 秒後，Bob 送出以下任務：**
+2. **Bob 送出以下任務：**
 
    ```text
    Show the Pro plan from #1 on the pricing page. Use a 30-day free trial with no card.
    ```
 
-3. **衝突 A：試用條件，影響大。** 兩個任務對 #1 的試用條件解讀互相矛盾。spec 沒有寫試用條件，因此這個衝突的影響大。這時 Alice 的變更還沒推送，Bob 也還沒寫程式碼。因此衝突 A 在發生前或發生中。master agent 呼叫 `escalate`。
-   - Oceania 伺服器建立衝突頻道，並邀請 Alice、Bob 與 spec 作者。
-   - 衝突頻道顯示摘要、階段、待決事項與兩個按鈕。
-   - Oceania 伺服器暫停 Alice 與 Bob 的 session。
+3. **衝突 A：試用條件，發生前，影響大。** 兩個任務對 #1 的試用條件解讀互相矛盾。spec 沒有寫試用條件，因此這個衝突的影響大。master agent 呼叫 `escalate`。
+   - Oceania 伺服器建立衝突頻道 `oceania-1-<id>`，並邀請 Alice、Bob 與 Tverous。
+   - 衝突頻道顯示摘要、待決事項與兩個按鈕：「14 days, card required」與「30 days, no card」。
+   - Oceania 伺服器暫停兩個 session。
    - 如果 agent 在判斷回合結束前結束這一輪，`Stop` hook 先等待判斷回合結束，再等待決定。
-4. **spec 作者決定。** spec 作者點選「30 days, no card」。
+4. **衝突 B：重複的工作，發生前，影響小。** Bob 的定價頁面需要 Alice 新增的 Pro 方案。
+   - master agent 通知 Bob 的 agent：使用 Alice 的方案資料，只修改定價頁面。
+   - master agent 在共用頻道貼出摘要。
+   - Bob 的 agent 也可能想在 `src/plans.ts` 新增 Pro 方案。這時即時檢查拒絕這次寫入，衝突 B 在發生中。兩種情況都符合生命週期。
+5. **Tverous 決定。** Tverous 點選「30 days, no card」。
    - 決定以留言的形式出現在 issue #1。
    - 兩個 session 自動恢復，並帶著決定繼續工作。
-5. **衝突 B：重複的方案，影響小，發生中。** Bob 的 agent 需要 Pro 方案的資料，因此也想在 `src/plans.ts` 新增 Pro 方案。
-   - 即時檢查拒絕這次寫入，並傳送 Alice 的 diff。Oceania 伺服器記錄衝突 B。
-   - Bob 的 agent 使用 Alice 的方案資料，只修改 `src/pricing.ts`。
-   - master agent 在共用頻道貼出摘要。
-   - master agent 也可能更早發現衝突 B，並在發生前通知 Bob。兩種情況都符合生命週期。
-6. **衝突 B：發生後。** Alice 的 agent 把 30 天、不需要信用卡的方案推送到 main。
-   - Oceania 伺服器偵測到推送，並把衝突 B 的階段改成發生後。
-   - master agent 通知 Bob 的 agent：先用 rebase 合併 main，再推送。
-   - Bob 的 agent 推送定價頁面。master agent 把衝突 A 與衝突 B 標記為已解決。
-7. **成員查看結果。**
-   - Tverous 打開 Oceania 的 App Home。進度看板顯示兩個 session，以及兩個衝突的階段、狀態與決定。
-   - `main/` clone 從 main 產生定價頁面。頁面顯示 Pro 方案：30 天試用，不需要信用卡。
+6. **推送。** 兩個 agent 推送到 main。
+   - Alice 推送後，master agent 通知 Bob 的 agent：先用 rebase 合併 main，再推送。
+   - 某次推送顯示 main 已有決定後，master agent 才把衝突 A 標記為已解決。
+   - main 有 Bob 的定價頁面後，master agent 把衝突 B 標記為已解決。
 
-影片節奏：影片總長 115 秒，比 2 分鐘的上限少 5 秒。
+### 第 3 輪：同時修改同一個檔案
+
+1. **Alice 送出以下任務：**
+
+   ```text
+   Show the yearly price next to the monthly price on the pricing page.
+   ```
+
+2. **Bob 送出以下任務：**
+
+   ```text
+   Mark the Pro plan as Most popular on the pricing page.
+   ```
+
+3. **衝突 C：同一個檔案，影響小。** 兩個任務都修改 `src/pricing.ts`。
+   - Alice 的 agent 先修改這個檔案。之後 Bob 的 agent 寫入這個檔案時，即時檢查拒絕這次寫入，並傳送 Alice 的 diff。衝突 C 在發生中。
+   - Bob 的 agent 以 Alice 的變更為基礎修改。
+   - 一個 agent 推送後，master agent 通知另一個 agent 先用 rebase 合併 main。衝突 C 在發生後。
+   - 另一個 agent 推送後，所有衝突都已解決。
+
+### 結尾：成員查看結果
+
+- Tverous 打開 Oceania 的 App Home。進度看板顯示兩個 agent。
+- 進度看板為每個衝突顯示生命週期，例如 `Before 9:03 PM → During 9:04 PM → After 9:05 PM → Resolved 9:06 PM`。
+- `main/` clone 從 main 產生定價頁面。頁面顯示 Pro 方案：30 天免費試用、不需要信用卡，並標示 Most popular。
+- 每個方案顯示月費與年費。表格下方有 FAQ。
+
+### 影片節奏
+
+一次完整錄影的真實時間大約 10 到 14 分鐘。參賽團隊把錄影剪成 115 秒，比 2 分鐘的上限少 5 秒。畫面以 Oceania feed 為主，旁邊是兩個 agent 與 Slack。
 
 | 時間 | 內容 |
 |---|---|
-| 0–15 秒 | 說明問題。 |
-| 15–30 秒 | 筆電 A：Alice 送出任務。筆電 B：Bob 送出任務。 |
-| 30–50 秒 | 衝突 A：Oceania 發現試用條件互相矛盾。兩個 session 暫停。衝突頻道出現。 |
-| 50–60 秒 | 筆電 A：spec 作者點選一次。決定出現在 issue。兩個 session 恢復。 |
-| 60–80 秒 | 筆電 B：衝突 B 發生中。Oceania 拒絕 Bob 的寫入，並附上 Alice 的 diff。共用頻道顯示處理摘要。 |
-| 80–100 秒 | 衝突 B 發生後：Alice 推送。Oceania 通知 Bob 先 rebase。Bob 推送。 |
-| 100–115 秒 | 筆電 A：進度看板顯示兩個衝突都已解決。定價頁面顯示新的試用條件。旁白說明規模：想像 50 位工程師在不同的時區工作。 |
-
-角色：
-
-- Tverous 扮演 spec 作者，並在最後打開進度看板。
-- 參賽團隊的另外兩個人扮演 Alice 與 Bob。Alice 在筆電 A 上操作。
-- Bob 預設在筆電 A 的 `bob/` clone 上操作，因為筆電 B 可能來不及準備（2026-11-11 的決定）。Bob 的 hook 仍然透過 tailnet 的 HTTPS 網址連到 Oceania。
-- 筆電 B 準備好時，Bob 改在筆電 B 上操作。這樣影片顯示不同的人在不同的電腦上工作。這只改變設定，不改變程式碼。
-- 三個人都需要 Slack workspace 帳號，因為 Oceania 會邀請 Alice 與 Bob 進入衝突頻道。
-- 錄影：兩台筆電同時錄製各自的螢幕。參賽團隊用 QuickTime Player 的 **Edit → Add Clip to End**，依照影片節奏接起兩台筆電的片段。
-- 英文：Tverous 的 Copilot 記憶有一條「用繁體中文回覆」的偏好。Copilot CLI 在互動模式會讀取記憶。因此錄影前，Tverous 在 Copilot CLI 執行 `/memory off`。錄影後，Tverous 執行 `/memory on`。
+| 0–10 秒 | 說明問題：每個人單獨使用 agent。畫面顯示 issue #1。 |
+| 10–25 秒 | 第 1 輪：Alice 與 Bob 送出不同的需求。Oceania feed 顯示每個 agent 收到另一個 agent 的任務與推送。 |
+| 25–45 秒 | 第 2 輪：衝突 A 出現。衝突頻道出現，兩個 session 暫停。衝突 B 的通知送給 Bob 的 agent。 |
+| 45–60 秒 | Tverous 點選一次。決定出現在 issue #1。兩個 session 恢復。 |
+| 60–75 秒 | 第 2 輪的推送：Oceania 通知 Bob 先 rebase。衝突 A 與衝突 B 都已解決。 |
+| 75–95 秒 | 第 3 輪：即時檢查拒絕 Bob 的寫入，並附上 Alice 的 diff。一次推送後，Oceania 通知另一個 agent 先 rebase。 |
+| 95–115 秒 | 進度看板顯示每個衝突的生命週期。定價頁面顯示結果。旁白說明規模：想像 50 位工程師在不同的時區工作。 |
 
 ## 9. 驗收標準
 
-- 第 8 節的情境必須連續完整執行三次。成員的輸入只有兩則 agent 訊息與一次 Slack 點選。
+- 第 8 節的情境必須連續完整執行三次。成員的輸入只有六則 agent 訊息與一次 Slack 點選。
 - 自動化測試使用模擬的 hook payload，涵蓋以下行為：
   - hook 正確寫入與讀取 Memory。
   - 每次讀取只送出該 session 尚未讀取的事件。
@@ -708,6 +759,7 @@ Launch a Pro plan with a free trial. Add the plan and show it on the pricing pag
 | MVP 只支援工程師。demo 只有兩位工程師，不包含業務 Carol | 參賽團隊 |
 | MVP 只使用 hook。之後的版本用 MCP 連接沒有 hook 的 agent | 實作者提案，參賽團隊同意 |
 | Bob 預設在筆電 A 的 `bob/` 上執行。筆電 B 是選用的 | 實作者決定，參賽團隊授權（2026-11-11） |
+| demo 改成三輪。Bob 的 agent 在筆電 B 上執行，Tverous 從筆電 A 透過 SSH 與 tailnet 操作它 | 參賽團隊（2026-11-11） |
 | master 是 agent，而不只是一次模型呼叫 | 參賽團隊 |
 | 衝突有生命週期：發生前預測，發生中阻止，發生後修正。生命週期是一個迴圈 | 參賽團隊 |
 | master agent 依照影響決定由誰解決衝突 | 參賽團隊 |
