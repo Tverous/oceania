@@ -5,6 +5,8 @@
 set -euo pipefail
 EMAIL=${1:?member email}
 URL=${2:?Oceania URL, for example https://laptop-a.example.ts.net}
+# The server matches `/hook` exactly, so a trailing slash in $URL would make the check below ask for //hook and get 404.
+URL=${URL%/}
 CLONE=${3:-$HOME/acme/bob}
 NODE=$(command -v node)
 case "$("$NODE" --version)" in v26*) ;; *) echo "Install Node 26 first: brew install node"; exit 1 ;; esac
@@ -29,4 +31,4 @@ cat > "$CLONE"/.claude/settings.local.json <<JSON
 JSON
 grep -qx '.claude/settings.local.json' "$CLONE"/.git/info/exclude || echo '.claude/settings.local.json' >> "$CLONE"/.git/info/exclude
 echo "ANTHROPIC_API_KEY set in this shell: $(env | grep -c '^ANTHROPIC_API_KEY=' || true) (must be 0)"
-echo "Oceania reachable (expect 400): $(curl -s -o /dev/null -w '%{http_code}' -X POST $URL/hook -d x)"
+echo "Oceania reachable (expect 400): $(curl -s -o /dev/null -w '%{http_code}' -X POST "$URL/hook" -d x)"
