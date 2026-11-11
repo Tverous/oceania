@@ -1,6 +1,9 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { parseSpec } from '../src/github.ts'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { ghSpecs, parseSpec } from '../src/github.ts'
 
 const decision = 'Decision: 30 days, no card\n@Tverous decided this in Slack. Tower recorded this decision.'
 
@@ -47,4 +50,19 @@ test('parseSpec keeps only decision comments', () => {
     author: 'Tverous',
     decisions: [decision],
   })
+})
+
+test('ghSpecs stops a gh call that does not answer and gives an error', { timeout: 5_000 }, async (t) => {
+  // A fake gh that never answers, like gh on a stalled network.
+  const bin = mkdtempSync(join(tmpdir(), 'tower-gh-'))
+  writeFileSync(join(bin, 'gh'), '#!/bin/sh\nexec sleep 10\n', { mode: 0o755 })
+  const path = process.env.PATH
+  process.env.PATH = `${bin}:${path}`
+  t.after(() => {
+    process.env.PATH = path
+    rmSync(bin, { recursive: true, force: true })
+  })
+  const specs = ghSpecs('Tverous/acme-pricing', 200)
+  await assert.rejects(specs.get(1), { message: 'Tower stopped "gh issue view 1" after 0.2 seconds.' })
+  await assert.rejects(specs.comment(1, decision), { message: 'Tower stopped "gh issue comment 1" after 0.2 seconds.' })
 })

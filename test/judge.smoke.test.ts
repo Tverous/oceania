@@ -95,6 +95,9 @@ test('real judge handles the demo sequence', { skip: !process.env.ANTHROPIC_API_
   const channel = opened[0].channel ?? ''
   assert.ok(opened[0].options && opened[0].options.length >= 2 && opened[0].options.length <= 3)
   assert.equal(memory.conflictByChannel(channel)?.impact, 'high')
+  // Conflict B: Bob's page needs the Pro plan that Alice adds (spec §8 step 5, the before stage).
+  const duplicate = memory.conflicts().some((c) => c.impact === 'low' && c.sessions.includes('b'))
+  assert.ok(bobNotes().length > 0 || duplicate, 'Bob has a Tower note or a low impact conflict for the Pro plan')
 
   // 3. Tverous decides. As the Stop hook does, each session takes the decision and works again.
   // Then Bob changes the pricing page, and Alice pushes.
@@ -111,4 +114,5 @@ test('real judge handles the demo sequence', { skip: !process.env.ANTHROPIC_API_
   assert.equal(opened.length, 1)
   console.log(`[conflicts] ${JSON.stringify(memory.conflicts())}`)
   console.log(`[notes] ${JSON.stringify(memory.notes())}`)
+  console.log(`[posts] ${JSON.stringify(memory.posts())}`)
 })

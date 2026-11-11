@@ -1,5 +1,6 @@
 import { DatabaseSync } from 'node:sqlite'
 import type { SQLOutputValue, SQLTagStore } from 'node:sqlite'
+import { filePatch } from './git.ts'
 import { who } from './text.ts'
 import { STAGE_LABELS } from './types.ts'
 import type {
@@ -10,6 +11,8 @@ import type {
   GitInfo,
   Member,
   Note,
+  Post,
+  Push,
   Session,
   Snapshot,
   Status,
@@ -45,6 +48,10 @@ CREATE TABLE IF NOT EXISTS decisions (
 CREATE TABLE IF NOT EXISTS events (
   id INTEGER PRIMARY KEY, kind TEXT NOT NULL, session TEXT, text TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS meta (name TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS pushes (
+  id INTEGER PRIMARY KEY, session TEXT NOT NULL, files TEXT NOT NULL, patch TEXT NOT NULL,
+  main TEXT NOT NULL, at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS posts (id INTEGER PRIMARY KEY, text TEXT NOT NULL, at INTEGER NOT NULL);
 `
 
 type Row = Record<string, SQLOutputValue>
@@ -180,6 +187,10 @@ export class Memory {
       const now = Date.now()
       if (pushed.length > 0) {
         this.#event('push', session, `${this.#who(s)} pushed to main: ${pushed.join(', ')}`)
+        // The push event has only file names, because agents read events. The master agent reads the hunks here.
+        const patch = pushed.map((f) => filePatch(prev?.patch ?? '', f)).join('')
+        this.#sql.run`INSERT INTO pushes (session, files, patch, main, at)
+          VALUES (${session}, ${JSON.stringify(pushed)}, ${patch}, ${git.main}, ${now})`
         this.#sql.run`INSERT INTO meta (name, value) VALUES ('main', ${git.main})
           ON CONFLICT (name) DO UPDATE SET value = excluded.value`
         for (const c of this.conflicts()) {
@@ -194,12 +205,32 @@ export class Memory {
         VALUES (${session}, ${(prev?.version ?? 0) + 1}, ${JSON.stringify(git.files)}, ${git.patch})
         ON CONFLICT (session) DO UPDATE
         SET version = excluded.version, files = excluded.files, patch = excluded.patch`
-      this.#event('diff', session, `${this.#who(s)} changed: ${git.files.join(', ')}`)
+      const text = git.files.length ? `changed: ${git.files.join(', ')}` : 'has no local changes.'
+      this.#event('diff', session, `${this.#who(s)} ${text}`)
     })
   }
 
   diffs(): Diff[] {
     return this.#sql.all`SELECT * FROM diffs ORDER BY rowid`.map((r) => record<Diff>(r, ['files']))
+  }
+
+  /** The pushes that `observe` detected, oldest first. */
+  pushes(): Push[] {
+    return this.#sql.all`SELECT session, files, patch, main, at FROM pushes ORDER BY id`.map((r) =>
+      record<Push>(r, ['files']),
+    )
+  }
+
+  /** Records a summary that the master agent posted. It is not an event, so it starts no round and agents do not read it. */
+  addPost(text: string): void {
+    this.#write(() => {
+      this.#sql.run`INSERT INTO posts (text, at) VALUES (${text}, ${Date.now()})`
+    })
+  }
+
+  /** The posted summaries, oldest first. */
+  posts(): Post[] {
+    return this.#sql.all`SELECT text, at FROM posts ORDER BY id`.map((r) => record<Post>(r))
   }
 
   /** The version of the diff of `other` that `session` saw last. 0 means none. */
@@ -227,6 +258,14 @@ export class Memory {
         .map(toNote)
         .sort((x, y) => x.id - y.id),
     )
+  }
+
+  /** Makes the notes with these ids pending again. */
+  undeliver(ids: number[]): void {
+    if (!ids.length) return
+    this.#write(() => {
+      for (const id of ids) this.#sql.run`UPDATE notes SET delivered = 0 WHERE id = ${id}`
+    })
   }
 
   /** All notes, also the delivered notes. */
@@ -331,8 +370,9 @@ export class Memory {
   }
 
   /**
-   * Records the first decision for the conflict in `channel`. Resumes each paused session
-   * with the blocking note `note`. The conflict stays open until main has the decision (spec §7.6).
+   * Records the first decision for the conflict in `channel`. Gives each session in the conflict
+   * the blocking note `note`. A paused session becomes idle only when no other open question pauses it.
+   * The conflict stays open until main has the decision (spec §7.6).
    */
   decide(channel: string, option: string, note: string): Conflict {
     return this.#write(() => {
@@ -342,9 +382,9 @@ export class Memory {
       const now = Date.now()
       this.#sql.run`UPDATE conflicts SET decision = ${option}, updated = ${now} WHERE id = ${c.id}`
       for (const s of c.sessions.flatMap((id) => this.session(id) ?? [])) {
-        if (s.status !== 'paused') continue
-        this.#sql.run`UPDATE sessions SET status = 'idle', updated = ${now} WHERE id = ${s.id}`
         this.#note(s.id, note, true)
+        if (s.status !== 'paused' || this.pausedBy(s.id)) continue
+        this.#sql.run`UPDATE sessions SET status = 'idle', updated = ${now} WHERE id = ${s.id}`
       }
       const d: Decision = { issue: c.issue as number, option, author: c.author as string, at: now }
       this.#sql.run`INSERT INTO decisions (issue, option, author, at) VALUES (${d.issue}, ${d.option}, ${d.author}, ${d.at})`

@@ -269,6 +269,8 @@ Tower 伺服器用 `node:sqlite` 把 Memory 存在一個檔案中。Tower 伺服
 - **衝突：** 相關的 session、相關的檔案、摘要、階段、影響、狀態與連結的 issue。狀態有兩個值：未解決與已解決。影響大的衝突另外記錄待決事項、選項、衝突頻道與決定。
 - **通知：** 目標 session、內容、阻擋或不阻擋、是否已送達。
 - **決定：** issue、選項、spec 作者、時間。
+- **推送：** session、推送的檔案、這些檔案推送到 main 的變更、推送後的 main commit、時間。
+- **摘要：** master agent 貼到共用頻道的摘要與時間。摘要不是事件。
 - **事件：** Memory 每次變動的紀錄。檢查迴圈與每個 session 都讀取事件。
 
 ### 7.4 衝突的生命週期與檢查迴圈
@@ -309,12 +311,14 @@ Tower 伺服器用 `node:sqlite` 把 Memory 存在一個檔案中。Tower 伺服
   3. 如果上一輪之後有新事件，master agent 執行一次判斷回合。
   4. 判斷回合用工具調查，並把結果寫回 Memory。
 - **限制：** 同一時間最多只有一個判斷回合。判斷回合執行期間的新事件，留到下一輪處理。
+  - 每個判斷回合最多執行 120 秒。逾時時，Tower 伺服器停止這個判斷回合，再處理下一批事件。
+  - 因此卡住的工具呼叫不會擋住之後的判斷回合，例如網路不穩時的 `gh` 或 Slack 呼叫。
 
 判斷回合的工具：
 
 | 工具 | 用途 |
 |---|---|
-| `read_memory` | 讀取 session、任務、diff、main、衝突、通知與決定。 |
+| `read_memory` | 讀取 session、任務、diff、main、衝突、通知、決定、推送與摘要。 |
 | `get_spec` | 讀取 spec issue 與已記錄的決定。 |
 | `track_conflict` | 建立或更新一筆衝突紀錄：相關的 session、檔案、摘要、階段、影響與狀態。 |
 | `notify` | 寫入一則通知給某個 session。通知可以阻擋或不阻擋。 |
@@ -329,6 +333,12 @@ Tower 伺服器用 `node:sqlite` 把 Memory 存在一個檔案中。Tower 伺服
 2. 以下兩個條件都成立時，Tower 伺服器拒絕這次寫入：
    - 另一個 session 的 diff 包含 P。
    - 這個 session 還沒看過該 diff 版本。
+
+   以下兩種情況，Tower 伺服器不拒絕寫入：
+   - 另一個 session 與這個 session 屬於同一位成員，而且在同一個 clone。例如 agent 重新啟動前的舊 session。
+   - 這個 session 自己的 diff 已經包含 P。先修改檔案的 session 有優先權（第 5 步）。
+
+   因此較晚的 session 修改 P 之後，不再從拒絕原因收到對方新的 diff 版本。master agent 用通知處理這種情況。
 3. Tower 伺服器在拒絕原因中傳送以下英文內容：
 
    ```text
@@ -408,11 +418,11 @@ Do this: Pull main with rebase before you push. Keep her plan data.
 6. 只有 spec 作者的點選會成為決定。其他成員點選按鈕時，Tower 伺服器傳送一則只有該成員看得到的訊息。這則訊息說明只有 spec 作者能決定。
 7. spec 作者點選後，Tower 伺服器依序執行以下步驟：
    1. 在 Memory 記錄決定。Memory 只接受第一個決定。因此重複點選不會產生兩個決定。
-   2. 解除相關 session 的暫停。
+   2. 解除相關 session 的暫停。另一個待決事項仍然暫停的 session 保持暫停，直到最後一個決定。
    3. 結束這些 session 的 `Stop` hook 等待，並傳送恢復原因。恢復原因包含決定，以及這個 session 尚未收到的通知。
    4. 在 GitHub issue 留言。留言內容見下方。留言失敗時，決定仍然有效。
    5. 更新 Slack 訊息，顯示決定。
-8. 決定之後，衝突仍然未解決，直到決定套用到 main。master agent 在之後的每一輪檢查這一點。
+8. 決定之後，衝突仍然未解決，直到決定套用到 main。master agent 在之後的每一輪檢查這一點。master agent 用 Memory 的推送紀錄檢查 main 上的變更。
 9. 決定需要修改已推送的變更時，master agent 把修改交給一個仍在工作的 session。如果沒有這樣的 session，通知會留在 Memory，直到負責人下一次啟動 agent。
 
 在暫停的 session 的下一次 `PreToolUse`，Tower 伺服器拒絕工具呼叫，並傳送以下英文原因：
@@ -484,13 +494,15 @@ Apply this decision. Then continue your task.
 
 Tower 伺服器在兩種時機更新進度看板：
 
-- Memory 每次變動時，Tower 伺服器對每位成員呼叫 `views.publish`。
+- Memory 每次變動後，Tower 伺服器重新產生進度看板。進度看板與上一次成功發布給某位成員的內容不同時，Tower 伺服器才對這位成員呼叫 `views.publish`。
 - 成員打開 App Home 時，Tower 伺服器收到 `app_home_opened` 事件，並更新這位成員的進度看板。
 
 規則如下：
 
 - Tower 伺服器用確定性的方式，從 Memory 產生進度看板，不呼叫模型。因此進度看板快速、便宜，而且內容一定與 Memory 一致。
 - 進度看板只顯示 Memory。成員不能在進度看板上指揮 agent。
+- 進度看板的時間只顯示到分鐘。因此只改變更新時間的 hook，在同一分鐘內不改變進度看板。
+- Slack 限制 `views.publish` 的呼叫次數。因此 Tower 伺服器只發布改變的進度看板。
 - Slack 開發者文件記載，app 可以隨時發布與更新 Home 分頁，而且 Home 分頁支援 Block Kit。
 
 ## 8. demo 情境（2 分鐘以內的影片）

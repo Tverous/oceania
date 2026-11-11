@@ -90,6 +90,22 @@ export interface Decision {
   at: number
 }
 
+/** What one push sent to main (spec §7.4): the files and the hunks of the session's last diff for them. */
+export interface Push {
+  session: string
+  files: string[]
+  patch: string
+  /** The main commit after the push. */
+  main: string
+  at: number
+}
+
+/** A summary that the master agent posted to the shared channel. */
+export interface Post {
+  text: string
+  at: number
+}
+
 export interface TowerEvent {
   id: number
   kind: EventKind

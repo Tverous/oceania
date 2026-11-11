@@ -36,8 +36,27 @@ test('homeView shows owner, agent, status, task, files, and time', () => {
   for (const text of ['Alice', 'Copilot CLI', 'working', 'Add the Pro plan', 'src/plans.ts', '<!date^']) {
     assert.ok(json.includes(text), text)
   }
-  const at = s.sessions[0].updated
-  assert.ok(json.includes(`<!date^${Math.floor(at / 1000)}^{date_short_pretty} {time}|${new Date(at).toISOString()}>`))
+  const minute = Math.floor(s.sessions[0].updated / 60_000) * 60_000
+  assert.ok(json.includes(`<!date^${minute / 1000}^{date_short_pretty} {time}|${new Date(minute).toISOString()}>`))
+})
+
+test('homeView shows times to the minute, so updates in the same minute give the same view', (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-11-11T19:40:12.345Z') })
+  const m = setup()
+  m.register(a)
+  m.register(b)
+  const first = JSON.stringify(homeView(m.snapshot()))
+  const minute = Date.parse('2026-11-11T19:40:00.000Z')
+  assert.ok(first.includes(`<!date^${minute / 1000}^{date_short_pretty} {time}|2026-11-11T19:40:00.000Z>`))
+  // Session a is now the newest, but in the same minute. The board does not change.
+  t.mock.timers.tick(30_000)
+  m.register(a)
+  assert.equal(JSON.stringify(homeView(m.snapshot())), first)
+  t.mock.timers.tick(30_000)
+  m.register(a)
+  const next = JSON.stringify(homeView(m.snapshot()))
+  assert.ok(next.includes('|2026-11-11T19:41:00.000Z>'))
+  assert.ok(next.indexOf('Alice') < next.indexOf('Bob'), 'the newest session comes first')
 })
 
 test('homeView shows conflicts with stage and impact, open first', () => {

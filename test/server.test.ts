@@ -1,16 +1,19 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { request } from 'node:http'
 import type { AddressInfo } from 'node:net'
+import { setTimeout as sleep } from 'node:timers/promises'
 import { Memory } from '../src/memory.ts'
 import { createServer, handleHook } from '../src/server.ts'
 import type { HookPayload } from '../src/server.ts'
-import { MAX_TEXT, resume } from '../src/text.ts'
+import { MAX_TEXT, note, resume } from '../src/text.ts'
 import type { GitInfo, HookDecision } from '../src/types.ts'
 
 const ALICE = 'alice@example.com'
 const BOB = 'bob@example.com'
 const REPO = 'github.com/tverous/acme-pricing'
-const ROOTS: Record<string, string> = { a: '/work/alice', b: '/work/bob', c: '/work/carol' }
+/** a2 is a second session of Alice in the same clone, for example after a restart. */
+const ROOTS: Record<string, string> = { a: '/work/alice', a2: '/work/alice', b: '/work/bob', c: '/work/carol' }
 const CHANNEL = 'tower-1-x'
 const OPTS = { settled: async () => {}, holdMs: 500 }
 
@@ -22,7 +25,7 @@ function git(session: string, files: string[] = [], diff = '', main = 'm1', repo
   return { root: ROOTS[session], repo, base: 'b0', main, files, patch: diff }
 }
 
-/** Sends one hook request. Session a is Alice's Copilot CLI. Other sessions are Bob's Claude Code. */
+/** Sends one hook request. Sessions a and a2 are Alice's Copilot CLI. Other sessions are Bob's Claude Code. */
 function hook(
   m: Memory,
   session: string,
@@ -30,11 +33,12 @@ function hook(
   info?: GitInfo,
   opts = OPTS,
 ): Promise<HookDecision> {
+  const alice = session.startsWith('a')
   return handleHook(
     m,
     {
-      agent: session === 'a' ? 'copilot' : 'claude',
-      member: session === 'a' ? ALICE : BOB,
+      agent: alice ? 'copilot' : 'claude',
+      member: alice ? ALICE : BOB,
       payload: { session_id: session, cwd: ROOTS[session], ...payload },
       git: info,
     },
@@ -267,4 +271,112 @@ test('createServer answers POST /hook and rejects other requests', async (t) => 
   assert.equal((await fetch(`${url}/hook`, { method: 'POST', body: 'x' })).status, 400)
   assert.equal((await fetch(`${url}/other`, { method: 'POST', body: '{}' })).status, 404)
   assert.equal((await fetch(`${url}/hook`)).status, 404)
+})
+
+test('PreToolUse skips an old session of the same member in the same clone', async () => {
+  const m = setup()
+  await hook(m, 'a', { hook_event_name: 'PostToolUse' }, git('a', ['src/plans.ts'], patch('src/plans.ts', '// Pro')))
+  await hook(m, 'a2', { hook_event_name: 'SessionStart' }, git('a2'))
+  assert.deepEqual(await hook(m, 'a2', edit('/work/alice/src/plans.ts'), git('a2')), {})
+  assert.deepEqual(m.conflicts(), [])
+  // A session in another member's clone still gets the deny.
+  await hook(m, 'b', { hook_event_name: 'SessionStart' }, git('b'))
+  assert.ok((await hook(m, 'b', edit('/work/bob/src/plans.ts'), git('b'))).deny)
+})
+
+test('PreToolUse does not deny the first writer on a file in its own diff', async () => {
+  const m = setup()
+  const changeA = git('a', ['src/plans.ts'], patch('src/plans.ts', '// Pro'))
+  await hook(m, 'a', { hook_event_name: 'PostToolUse' }, changeA)
+  await hook(m, 'b', { hook_event_name: 'SessionStart' }, git('b'))
+  assert.ok((await hook(m, 'b', edit('/work/bob/src/plans.ts'), git('b'))).deny)
+  // Bob writes the file after the deny. Alice changed the file first, so her next write goes through.
+  await hook(m, 'b', { hook_event_name: 'PostToolUse' }, git('b', ['src/plans.ts'], patch('src/plans.ts', '// Bob')))
+  assert.deepEqual(await hook(m, 'a', edit('/work/alice/src/plans.ts'), changeA), {})
+  assert.equal(m.conflicts().length, 1)
+})
+
+test('Stop starts the resume reason with the decision, then the pending notes', async () => {
+  const m = setup()
+  await escalated(m)
+  const pending = note("Alice's agent (Copilot CLI) already adds the Pro plan to src/plans.ts.", 'Use her plan data.')
+  m.addNote('b', pending, true)
+  setTimeout(() => decide(m), 20)
+  const { block } = await hook(m, 'b', { hook_event_name: 'Stop' })
+  assert.equal(block, `${resume(1, 'Tverous', '30 days, no card')}\n${pending}`)
+})
+
+test('Stop sends the notes that fit and keeps the other notes for the next hook', async () => {
+  const m = setup()
+  await escalated(m)
+  const big = note(
+    "Your changes conflict with Alice's changes in these files: src/plans.ts.",
+    `Read her diff below. Change your code so that both changes can merge.\n${'+ line\n'.repeat(1250)}`,
+  )
+  m.addNote('b', big, true)
+  setTimeout(() => decide(m), 20)
+  const { block } = await hook(m, 'b', { hook_event_name: 'Stop' })
+  assert.equal(block, resume(1, 'Tverous', '30 days, no card'))
+  // The next hook sends the complete note, and only one time.
+  const read = { hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: 'src/plans.ts' } }
+  assert.deepEqual(await hook(m, 'b', read), { deny: big })
+  assert.deepEqual(await hook(m, 'b', read), {})
+  // Memory keeps one row for each note, so read_memory shows the note one time.
+  assert.equal(m.notes().filter((n) => n.text === big).length, 1)
+})
+
+test('PostToolUse puts the notes before the events and keeps the notes that do not fit', async () => {
+  const m = setup()
+  await hook(m, 'a', { hook_event_name: 'SessionStart' }, git('a'))
+  for (let i = 0; i < 100; i++) {
+    await hook(m, 'b', { hook_event_name: 'UserPromptSubmit', prompt: `Task ${i}: ${'x'.repeat(100)}` })
+  }
+  m.addNote('a', 'Tower note: S\nDo this: I', false)
+  const { context = '' } = await hook(m, 'a', { hook_event_name: 'PostToolUse' }, git('a'))
+  assert.ok(context.startsWith('Tower updates:\nTower note: S\nDo this: I\n- '))
+  assert.ok(context.endsWith('[Tower clipped this text.]'))
+  assert.ok(Buffer.byteLength(context) <= MAX_TEXT)
+
+  const long = (i: number) => note(`S${i}`, 'x'.repeat(5000))
+  m.addNote('a', long(1), false)
+  m.addNote('a', long(2), false)
+  assert.deepEqual(await hook(m, 'a', { hook_event_name: 'PostToolUse' }, git('a')), { context: `Tower updates:\n${long(1)}` })
+  assert.deepEqual(await hook(m, 'a', { hook_event_name: 'PostToolUse' }, git('a')), { context: `Tower updates:\n${long(2)}` })
+  assert.deepEqual(await hook(m, 'a', { hook_event_name: 'PostToolUse' }, git('a')), {})
+})
+
+test('a Stop hold whose request ends leaves the decision for the next hook', async (t) => {
+  const m = setup()
+  await escalated(m)
+  const server = createServer(m, { ...OPTS, holdMs: 5_000 }).listen(0, '127.0.0.1')
+  t.after(() => server.close())
+  await new Promise((done) => server.once('listening', done))
+  const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/hook`
+  const stop = (session: string) =>
+    JSON.stringify({
+      agent: session === 'a' ? 'copilot' : 'claude',
+      member: session === 'a' ? ALICE : BOB,
+      payload: { hook_event_name: 'Stop', session_id: session, cwd: ROOTS[session] },
+    })
+  // Both Stop requests end during the hold, for example when the user presses Esc.
+  for (const session of ['a', 'b']) {
+    const ended = new AbortController()
+    const req = request(url, { method: 'POST', signal: ended.signal })
+    req.on('error', () => {})
+    req.end(stop(session))
+    await sleep(50)
+    ended.abort()
+  }
+  await sleep(50)
+  // Alice's agent starts a new Stop hold. Bob's agent stays idle.
+  const live = fetch(url, { method: 'POST', body: stop('a') })
+  await sleep(50)
+  decide(m)
+  const decision = resume(1, 'Tverous', '30 days, no card')
+  assert.deepEqual(await (await live).json(), { block: decision })
+  assert.equal(m.session('a')?.status, 'working')
+  // Bob's agent gets the decision at its next tool call.
+  assert.equal(m.session('b')?.status, 'idle')
+  const read = { hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: 'src/plans.ts' } }
+  assert.deepEqual(await hook(m, 'b', read), { deny: decision })
 })

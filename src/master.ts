@@ -8,6 +8,11 @@ import type { Conflict, EventKind, Spec, TowerEvent } from './types.ts'
 export const DEBOUNCE_MS = 1_500
 /** Longest wait of `settled()`. */
 export const SETTLE_MS = 90_000
+/** Longest judge round. Then Tower stops the round, so that a stuck tool call does not block the next rounds. */
+export const ROUND_MS = 120_000
+/** How many of the last pushes and posts read_memory returns. */
+const LAST_PUSHES = 5
+const LAST_POSTS = 20
 
 /** Only events that agents write start a round (spec §7.4). */
 const TRIGGERS: EventKind[] = ['task', 'diff', 'push']
@@ -48,12 +53,19 @@ export function createTools(memory: Memory, chat: Chat, specs: Specs): Tools {
   return {
     read_memory: define({
       description:
-        'Read Tower Memory: members, sessions, tasks, diffs, main, conflicts, notes, decisions, and the last 200 events.',
+        'Read Tower Memory: members, sessions, tasks, diffs, main, conflicts, notes, decisions, and the last 200 events. ' +
+        `pushes: the last ${LAST_PUSHES} pushes, with the changes that reached main. ` +
+        `posts: the last ${LAST_POSTS} summaries that you posted with post_activity.`,
       schema: {},
       async run() {
         const diffs = memory.diffs().map((d) => ({ ...d, patch: clip(d.patch) }))
+        const pushes = memory
+          .pushes()
+          .slice(-LAST_PUSHES)
+          .map((p) => ({ ...p, patch: clip(p.patch) }))
+        const posts = memory.posts().slice(-LAST_POSTS)
         const events = memory.eventsAfter(memory.lastEventId() - 200)
-        return JSON.stringify({ ...memory.snapshot(), diffs, notes: memory.notes(), events })
+        return JSON.stringify({ ...memory.snapshot(), diffs, pushes, notes: memory.notes(), posts, events })
       },
     }),
     get_spec: define({
@@ -103,6 +115,7 @@ export function createTools(memory: Memory, chat: Chat, specs: Specs): Tools {
       schema: { text: z.string() },
       async run({ text }) {
         await chat.post(text)
+        memory.addPost(text)
         return 'Tower posted the summary.'
       },
     }),
@@ -144,15 +157,20 @@ export function roundPrompt(events: TowerEvent[]): string {
   ].join('\n')
 }
 
+/** One judge round. `signal` aborts when the round takes longer than `roundMs`. */
+export type Judge = (prompt: string, tools: Tools, signal: AbortSignal) => Promise<void>
+
 /**
  * Runs one judge round for each batch of agent events (spec §7.4). Starts at the latest event,
  * so old events do not start a round after a restart. At most one round runs at a time.
+ * A round that takes longer than `roundMs` is aborted, and the next batch runs.
  */
 export function startMaster(
   memory: Memory,
   tools: Tools,
-  judge: (prompt: string, tools: Tools) => Promise<void>,
+  judge: Judge,
   debounceMs = DEBOUNCE_MS,
+  roundMs = ROUND_MS,
 ): { stop(): void; settled(): Promise<void> } {
   let cursor = memory.lastEventId()
   let timer: NodeJS.Timeout | undefined
@@ -175,10 +193,21 @@ export function startMaster(
     running = true
     const events = memory.eventsAfter(cursor)
     cursor = events.at(-1)?.id ?? cursor
+    const abort = new AbortController()
+    const limit = setTimeout(
+      () => abort.abort(new Error(`The judge round took more than ${roundMs} ms. Tower stopped it.`)),
+      roundMs,
+    )
+    // Tower does not wait for a judge that does not stop after the abort.
+    const aborted = new Promise<never>((_, reject) => {
+      abort.signal.addEventListener('abort', () => reject(abort.signal.reason), { once: true })
+    })
     try {
-      await judge(roundPrompt(events), tools)
+      await Promise.race([judge(roundPrompt(events), tools, abort.signal), aborted])
     } catch (error) {
       console.error('Tower: the judge round failed.', error)
+    } finally {
+      clearTimeout(limit)
     }
     running = false
     schedule()

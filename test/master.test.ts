@@ -5,6 +5,7 @@ import { z } from 'zod'
 import { Memory } from '../src/memory.ts'
 import { createTools, startMaster } from '../src/master.ts'
 import type { Chat, Specs, Tools } from '../src/master.ts'
+import { clip } from '../src/text.ts'
 import type { Conflict, Status } from '../src/types.ts'
 
 const SPEC = {
@@ -74,6 +75,40 @@ test('track_conflict creates and resolves a conflict', async () => {
   assert.equal(await tools.track_conflict.run({ ...args, status: 'open' }), 'Conflict #1')
   await tools.track_conflict.run({ ...args, id: 1, status: 'resolved' })
   assert.equal(m.conflict(1)?.status, 'resolved')
+})
+
+test('read_memory shows the posted summaries and what reached main', async () => {
+  const m = setup()
+  const posted: string[] = []
+  const chat: Chat = { ...fakeChat(m).chat, post: async (text) => void posted.push(text) }
+  const tools = createTools(m, chat, specs)
+  await tools.post_activity.run({ text: 'Conflict #1: Bob uses the plan data of Alice.' })
+  const patch = `diff --git a/src/plans.ts b/src/plans.ts\n${'+  { id: "pro", trialDays: 30 },\n'.repeat(500)}`
+  m.observe('a', { files: ['src/plans.ts'], patch, main: 'm1' })
+  m.observe('a', { files: [], patch: '', main: 'm2' })
+  const memory = JSON.parse(await tools.read_memory.run({}))
+  assert.deepEqual(posted, ['Conflict #1: Bob uses the plan data of Alice.'])
+  assert.deepEqual(
+    memory.posts.map((p: { text: string }) => p.text),
+    posted,
+  )
+  assert.equal(memory.pushes.length, 1)
+  assert.equal(memory.pushes[0].session, 'a')
+  assert.deepEqual(memory.pushes[0].files, ['src/plans.ts'])
+  assert.equal(memory.pushes[0].patch, clip(patch))
+  assert.notEqual(clip(patch), patch)
+})
+
+test('post_activity records nothing when Slack fails', async () => {
+  const m = setup()
+  const chat: Chat = {
+    ...fakeChat(m).chat,
+    async post() {
+      throw new Error('Slack is down.')
+    },
+  }
+  await assert.rejects(createTools(m, chat, specs).post_activity.run({ text: 'S' }), /Slack is down/)
+  assert.deepEqual(m.posts(), [])
 })
 
 test('escalate opens the Slack channel before it pauses sessions', async () => {
@@ -166,6 +201,35 @@ test('settled waits for the running round', async () => {
   m.addTask({ session: 'a', summary: 'Add the Pro plan', issue: 1 })
   await master.settled()
   assert.equal(done, true)
+  master.stop()
+})
+
+test('startMaster stops a round that does not end, then runs the next batch', async (t) => {
+  const error = t.mock.method(console, 'error', () => {})
+  const m = setup()
+  const signals: AbortSignal[] = []
+  const prompts: string[] = []
+  const master = startMaster(
+    m,
+    {} as Tools,
+    (prompt, _tools, signal) => {
+      prompts.push(prompt)
+      signals.push(signal)
+      // The first round never ends, for example because a Slack call retries for 30 minutes.
+      return prompts.length === 1 ? new Promise<void>(() => {}) : Promise.resolve()
+    },
+    10,
+    50,
+  )
+  m.addTask({ session: 'a', summary: 'Add the Pro plan', issue: 1 })
+  await sleep(30)
+  m.addTask({ session: 'b', summary: 'Show the Pro plan', issue: 1 })
+  await Promise.race([master.settled(), sleep(1_000)])
+  assert.equal(prompts.length, 2)
+  assert.match(prompts[1], /Show the Pro plan/)
+  assert.equal(signals[0].aborted, true)
+  assert.equal(signals[1].aborted, false)
+  assert.equal(error.mock.callCount(), 1)
   master.stop()
 })
 

@@ -4,7 +4,8 @@ import { relative, resolve, sep } from 'node:path'
 import { json } from 'node:stream/consumers'
 import { filePatch } from './git.ts'
 import type { Memory } from './memory.ts'
-import { clip, overlap, paused, teamStatus, updates } from './text.ts'
+import { clip, overlap, paused, pending, teamStatus, updates } from './text.ts'
+import type { Delivery } from './text.ts'
 import type { AgentKind, GitInfo, HookDecision, Note } from './types.ts'
 
 /** Longest time that `Stop` waits for a paused session to resume. */
@@ -55,8 +56,16 @@ export interface HookOptions {
   holdMs: number
 }
 
-/** Applies one hook event to Memory and returns what the agent gets (spec §7.2 and §7.4). */
-export async function handleHook(memory: Memory, req: HookRequest, opts: HookOptions): Promise<HookDecision> {
+/**
+ * Applies one hook event to Memory and returns what the agent gets (spec §7.2 and §7.4).
+ * `signal` aborts when the request ends before the response. Then a `Stop` hold ends and takes no notes.
+ */
+export async function handleHook(
+  memory: Memory,
+  req: HookRequest,
+  opts: HookOptions,
+  signal?: AbortSignal,
+): Promise<HookDecision> {
   const { payload, git } = req
   const id = payload.session_id
   memory.register({
@@ -85,11 +94,12 @@ export async function handleHook(memory: Memory, req: HookRequest, opts: HookOpt
       return preToolUse(memory, id, payload)
     case 'PostToolUse': {
       if (git) memory.observe(id, git)
-      const context = updates(memory.readEvents(id), memory.takeNotes(id, false))
+      const notes = memory.takeNotes(id, false)
+      const context = send(memory, notes, updates(memory.readEvents(id), notes))
       return context === undefined ? {} : { context }
     }
     case 'Stop':
-      return stop(memory, id, opts)
+      return stop(memory, id, opts, signal)
     default:
       return {}
   }
@@ -103,7 +113,7 @@ function preToolUse(memory: Memory, id: string, payload: HookPayload): HookDecis
     return { deny: paused(pause.question as string, name, pause.channel as string) }
   }
   const notes = memory.takeNotes(id, true)
-  if (notes.length) return { deny: joined(notes) }
+  if (notes.length) return { deny: send(memory, notes, pending(notes)) }
 
   const self = memory.session(id)
   if (!self?.root || !self.repo) return {}
@@ -114,10 +124,15 @@ function preToolUse(memory: Memory, id: string, payload: HookPayload): HookDecis
     .filter((path) => path !== '..' && !path.startsWith(`..${sep}`))
   if (!paths.length) return {}
 
-  for (const diff of memory.diffs()) {
+  const diffs = memory.diffs()
+  // The session that changed a file first has priority (spec §7.4 step 5). A file in its own diff is not a new overlap.
+  const own = diffs.find((d) => d.session === id)?.files ?? []
+  for (const diff of diffs) {
     const owner = memory.session(diff.session)
     if (!owner || owner.id === id || owner.repo !== self.repo) continue
-    const shared = paths.filter((path) => diff.files.includes(path))
+    // An old session in the same clone is not another person.
+    if (owner.member === self.member && owner.root === self.root) continue
+    const shared = paths.filter((path) => diff.files.includes(path) && !own.includes(path))
     if (!shared.length || memory.seen(id, owner.id) >= diff.version) continue
     memory.markSeen(id, owner.id, diff.version)
     for (const path of shared) memory.trackOverlap(id, owner.id, path)
@@ -127,35 +142,43 @@ function preToolUse(memory: Memory, id: string, payload: HookPayload): HookDecis
   return {}
 }
 
-async function stop(memory: Memory, id: string, opts: HookOptions): Promise<HookDecision> {
+async function stop(memory: Memory, id: string, opts: HookOptions, signal?: AbortSignal): Promise<HookDecision> {
   if (!memory.pausedBy(id)) memory.setStatus(id, 'idle')
   await opts.settled()
-  if (memory.pausedBy(id) && !(await resumed(memory, id, opts.holdMs))) return {}
+  // When the request ended, the notes stay for the next Stop or PreToolUse.
+  if (signal?.aborted) return {}
+  if (memory.pausedBy(id) && !(await resumed(memory, id, opts.holdMs, signal))) return {}
+  if (signal?.aborted) return {}
   const notes = [...memory.takeNotes(id, true), ...memory.takeNotes(id, false)]
   if (!notes.length) return {}
-  const block = joined(notes)
+  const block = send(memory, notes, pending(notes))
   memory.setStatus(id, 'working')
   lastBlock.getOrInsertComputed(memory, () => new Map()).set(id, block)
   return { block }
 }
 
-/** Waits until no conflict pauses `session`. False when `holdMs` ends first. */
-function resumed(memory: Memory, session: string, holdMs: number): Promise<boolean> {
+/** Waits until no conflict pauses `session`. False when `holdMs` ends first or `signal` aborts. */
+function resumed(memory: Memory, session: string, holdMs: number, signal?: AbortSignal): Promise<boolean> {
   return new Promise((done) => {
     const finish = (ok: boolean) => {
       clearTimeout(timer)
       unsubscribe()
+      signal?.removeEventListener('abort', end)
       done(ok)
     }
+    const end = () => finish(false)
     const unsubscribe = memory.onChange(() => {
       if (!memory.pausedBy(session)) finish(true)
     })
-    const timer = setTimeout(() => finish(false), holdMs)
+    const timer = setTimeout(end, holdMs)
+    signal?.addEventListener('abort', end)
   })
 }
 
-function joined(notes: Note[]): string {
-  return clip(notes.map((n) => n.text).join('\n'))
+/** Returns the text of `delivery`. The `taken` notes that are not in the text become pending again. */
+function send<T>(memory: Memory, taken: Note[], delivery: Delivery<T>): T {
+  memory.undeliver(taken.filter((n) => !delivery.sent.includes(n)).map((n) => n.id))
+  return delivery.text
 }
 
 /** The hook endpoint: `POST /hook` with a HookRequest. Other requests get 404. */
@@ -172,8 +195,14 @@ export function createServer(memory: Memory, opts: HookOptions): Server {
       res.writeHead(400).end()
       return
     }
+    // The agent can end the hook before Tower answers, for example when the user presses Esc.
+    const ended = new AbortController()
+    res.on('close', () => {
+      if (!res.writableFinished) ended.abort()
+    })
     try {
-      const decision = await handleHook(memory, body, opts)
+      const decision = await handleHook(memory, body, opts, ended.signal)
+      if (ended.signal.aborted) return
       res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(decision))
     } catch (error) {
       console.error(error)

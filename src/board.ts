@@ -34,8 +34,17 @@ export function homeView(s: Snapshot): types.HomeView {
   }
 }
 
+/**
+ * Sorts by the minute that the board shows. Many hooks in one minute then do not change the order,
+ * and Slack does not get a new board for each hook.
+ */
 function newest(x: { updated: number }, y: { updated: number }): number {
-  return y.updated - x.updated
+  return minute(y.updated) - minute(x.updated)
+}
+
+/** The start of the minute of `ms`, in epoch milliseconds. */
+function minute(ms: number): number {
+  return ms - (ms % 60_000)
 }
 
 /** One section for each item that fits in `room`, then a note when some items do not fit. */
@@ -76,9 +85,13 @@ function conflictText(c: Conflict, s: Snapshot): string {
   return lines.join('\n')
 }
 
-/** Slack date: the local time of the viewer, with the ISO time as the fallback text. */
+/**
+ * Slack date: the local time of the viewer, with the ISO time as the fallback text.
+ * The board shows minutes, so the time starts at the minute. The view then changes only once each minute.
+ */
 function date(ms: number): string {
-  return `<!date^${Math.floor(ms / 1000)}^{date_short_pretty} {time}|${new Date(ms).toISOString()}>`
+  const start = minute(ms)
+  return `<!date^${start / 1000}^{date_short_pretty} {time}|${new Date(start).toISOString()}>`
 }
 
 function fit(raw: string): string {

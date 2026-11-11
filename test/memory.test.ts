@@ -91,6 +91,27 @@ test('observe records a push and moves open conflicts to after', () => {
   assert.equal(m.snapshot().main, 'm2')
 })
 
+test('observe records what reached main with each push', () => {
+  const m = setup()
+  const plans = 'diff --git a/src/plans.ts b/src/plans.ts\n@@ -1 +1,2 @@\n+  { id: "pro", trialDays: 30 },\n'
+  const readme = 'diff --git a/README.md b/README.md\n@@ -1 +1 @@\n+Pro\n'
+  m.register({ ...a, main: 'm1' })
+  m.observe('a', { files: ['README.md', 'src/plans.ts'], patch: readme + plans, main: 'm1' })
+  m.observe('a', { files: ['README.md'], patch: readme, main: 'm2' })
+  const pushes = m.pushes()
+  assert.equal(pushes.length, 1)
+  assert.equal(typeof pushes[0].at, 'number')
+  assert.deepEqual({ ...pushes[0], at: 0 }, { session: 'a', files: ['src/plans.ts'], patch: plans, main: 'm2', at: 0 })
+})
+
+test('observe writes a clear event when the diff becomes empty', () => {
+  const m = setup()
+  m.register({ ...a, main: 'm1' })
+  m.observe('a', { files: ['src/plans.ts'], patch: 'P1', main: 'm1' })
+  m.observe('a', { files: [], patch: '', main: 'm2' })
+  assert.equal(m.eventsAfter(0).at(-1)?.text, "Alice's agent (Copilot CLI) has no local changes.")
+})
+
 test('observe ignores a pull', () => {
   const m = setup()
   m.register({ ...b, main: 'm1' })
@@ -112,6 +133,17 @@ test('takeNotes delivers each note once', () => {
   m.addNote('b', 'Tower note: X\nDo this: Y', true)
   assert.equal(m.takeNotes('b', true).length, 1)
   assert.equal(m.takeNotes('b', true).length, 0)
+})
+
+test('undeliver makes the notes pending again and keeps their order', () => {
+  const m = setup()
+  m.register(b)
+  m.addNote('b', 'N1', true)
+  m.addNote('b', 'N2', true)
+  const [first, second] = m.takeNotes('b', true)
+  m.undeliver([second.id, first.id])
+  assert.deepEqual(m.takeNotes('b', true), [first, second])
+  assert.equal(m.notes().length, 2)
 })
 
 test('trackOverlap creates one during conflict per pair', () => {
@@ -186,6 +218,33 @@ test('decide resumes sessions with a note and rejects a second decision', () => 
   assert.equal(m.conflict(id)?.status, 'open')
   assert.equal(m.decisions(1)[0].option, '30 days, no card')
   assert.throws(() => m.decide(CHANNEL, '14 days, card required', 'RESUME'))
+})
+
+test('decide resumes a session only when no other question pauses it', () => {
+  const m = setup()
+  escalated(m)
+  const second = m.trackConflict({
+    sessions: ['a', 'b'],
+    summary: 'The tasks use different card rules.',
+    stage: 'before',
+    impact: 'high',
+    status: 'open',
+    issue: 1,
+  })
+  m.escalate(second, { channel: 'tower-1-y', author: 'Tverous', question: 'Card required?', options: ['Yes', 'No'] })
+  m.decide(CHANNEL, '30 days', 'RESUME 1')
+  for (const s of ['a', 'b']) {
+    assert.equal(m.session(s)?.status, 'paused')
+    assert.equal(m.pausedBy(s)?.id, second)
+  }
+  m.decide('tower-1-y', 'No', 'RESUME 2')
+  for (const s of ['a', 'b']) {
+    assert.equal(m.session(s)?.status, 'idle')
+    assert.deepEqual(
+      m.takeNotes(s, true).map((n) => n.text),
+      ['RESUME 1', 'RESUME 2'],
+    )
+  }
 })
 
 test('addTask sends existing decisions when a session links to an issue', () => {

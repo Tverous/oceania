@@ -7,7 +7,7 @@ ACME=/Users/tverous/works/acme
 SEED=5f45cdcce86374a31c75476e2449cb94cf21d5da
 REPO=Tverous/acme-pricing
 
-rm -f "$TOWER"/tower.db*
+rm -rf "$TOWER"/tower.db* "$TOWER"/.tower
 git -C "$ACME/main" push --force origin "$SEED:main"
 for clone in alice main bob; do
   [ -d "$ACME/$clone" ] || continue

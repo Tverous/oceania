@@ -5,6 +5,12 @@ import type { Spec } from './types.ts'
 
 const run = promisify(execFile)
 
+/**
+ * Most time for one gh call. On a stalled network, gh can wait for minutes. The timeout makes this an error,
+ * so the judge round ends and the decision goes on to Slack.
+ */
+const GH_TIMEOUT_MS = 30_000
+
 /** The fields of `gh issue view --json title,body,author,comments` that Tower reads. */
 interface Issue {
   title: string
@@ -24,14 +30,26 @@ export function parseSpec(raw: string, issue: number): Spec {
   }
 }
 
-export function ghSpecs(repo: string): Specs {
+export function ghSpecs(repo: string, timeoutMs = GH_TIMEOUT_MS): Specs {
+  /** Runs gh. SIGKILL makes sure that gh stops at the timeout. */
+  async function gh(args: string[]): Promise<string> {
+    try {
+      return (await run('gh', args, { timeout: timeoutMs, killSignal: 'SIGKILL' })).stdout
+    } catch (error) {
+      // At the timeout, Node gives only "Command failed". Say the cause to the model and in the log.
+      const { killed, code } = error as { killed?: boolean; code?: unknown }
+      if (killed && code === null) {
+        throw new Error(`Tower stopped "gh ${args.slice(0, 3).join(' ')}" after ${timeoutMs / 1000} seconds.`, { cause: error })
+      }
+      throw error
+    }
+  }
   return {
     async get(issue) {
-      const { stdout } = await run('gh', ['issue', 'view', String(issue), '--repo', repo, '--json', 'title,body,author,comments'])
-      return parseSpec(stdout, issue)
+      return parseSpec(await gh(['issue', 'view', String(issue), '--repo', repo, '--json', 'title,body,author,comments']), issue)
     },
     async comment(issue, body) {
-      await run('gh', ['issue', 'comment', String(issue), '--repo', repo, '--body', body])
+      await gh(['issue', 'comment', String(issue), '--repo', repo, '--body', body])
     },
   }
 }

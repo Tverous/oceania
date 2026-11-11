@@ -20,10 +20,14 @@ const FIELD = 1_000
 
 /**
  * Connects Tower to Slack in Socket Mode: the shared channel, the conflict channels, the decision buttons,
- * and the board in App Home (spec §7.6, §7.10).
+ * and the board in App Home (spec §7.6, §7.10). Tests give a fake `app`.
  */
-export async function startSlack(memory: Memory, specs: Specs, tokens: { bot: string; app: string }): Promise<Chat> {
-  const app = new App({ token: tokens.bot, appToken: tokens.app, socketMode: true })
+export async function startSlack(
+  memory: Memory,
+  specs: Specs,
+  tokens: { bot: string; app: string },
+  app = new App({ token: tokens.bot, appToken: tokens.app, socketMode: true }),
+): Promise<Chat> {
   const { client } = app
 
   /** Invites each member that has a Slack user. A member who is in the channel already is not an error. */
@@ -52,8 +56,17 @@ export async function startSlack(memory: Memory, specs: Specs, tokens: { bot: st
     )
   }
 
+  /** The board JSON of the last successful publish to each member. */
+  const published = new Map<string, string>()
+
+  async function publish(user: string, view: types.HomeView, json: string): Promise<void> {
+    await client.views.publish({ user_id: user, view })
+    published.set(user, json)
+  }
+
   app.event('app_home_opened', async ({ event }) => {
-    await client.views.publish({ user_id: event.user, view: homeView(memory.snapshot()) })
+    const view = homeView(memory.snapshot())
+    await publish(event.user, view, JSON.stringify(view))
   })
 
   app.action<BlockAction<ButtonAction>>(/^decide-\d+$/, async ({ ack, action, body }) => {
@@ -73,14 +86,17 @@ export async function startSlack(memory: Memory, specs: Specs, tokens: { bot: st
   })
 
   // The first change starts the timer, so a stream of changes cannot delay the board.
+  // Most hooks do not change the board. Tower publishes only a changed board, so the board calls
+  // do not fill the Slack queue that the conflict and decision calls also use.
   let board: NodeJS.Timeout | undefined
   memory.onChange(() => {
     board ??= setTimeout(() => {
       board = undefined
       const view = homeView(memory.snapshot())
+      const json = JSON.stringify(view)
       for (const { slackId } of memory.members()) {
-        if (!slackId) continue
-        client.views.publish({ user_id: slackId, view }).catch((error) => {
+        if (!slackId || published.get(slackId) === json) continue
+        publish(slackId, view, json).catch((error) => {
           console.error('Tower: the board update failed.', error)
         })
       }

@@ -90,8 +90,42 @@ export function teamStatus(s: Snapshot, viewer: string): string {
   )
 }
 
-/** PostToolUse context: one line per event, then the note texts. Undefined when both are empty. */
-export function updates(events: TowerEvent[], notes: Note[]): string | undefined {
-  if (!events.length && !notes.length) return undefined
-  return clip(['Tower updates:', ...events.map((e) => `- ${e.text}`), ...notes.map((n) => n.text)].join('\n'))
+/** A text that Tower sends to an agent, and the notes in that text. Tower sends the other notes later. */
+export interface Delivery<T> {
+  text: T
+  sent: Note[]
+}
+
+/** The start of the resume text and of each decision note (spec §7.6). */
+const DECISION = /^Decision on #\d+ by /
+
+/**
+ * The notes, in order, that fit in one text after the `head` lines. Decisions come first (spec §7.6).
+ * The notes leave space for the clip mark, so `clip` cuts only the lines after them.
+ * The first note always fits: `clip` cuts it when it is too long.
+ */
+function fit(notes: Note[], head: string[]): Note[] {
+  const decisions = notes.filter((n) => DECISION.test(n.text))
+  let size = CLIPPED.length + encoder.encode(head.join('\n')).length
+  const sent: Note[] = []
+  for (const n of [...decisions, ...notes.filter((n) => !decisions.includes(n))]) {
+    size += encoder.encode(n.text).length + (sent.length || head.length ? 1 : 0)
+    if (sent.length && size > MAX_TEXT) break
+    sent.push(n)
+  }
+  return sent
+}
+
+/** Stop reason or deny reason with pending notes: the decision, then the other notes (spec §7.6). */
+export function pending(notes: Note[]): Delivery<string> {
+  const sent = fit(notes, [])
+  return { text: clip(sent.map((n) => n.text).join('\n')), sent }
+}
+
+/** PostToolUse context: the note texts, then one line per event. The text is undefined when both are empty. */
+export function updates(events: TowerEvent[], notes: Note[]): Delivery<string | undefined> {
+  if (!events.length && !notes.length) return { text: undefined, sent: [] }
+  const head = ['Tower updates:']
+  const sent = fit(notes, head)
+  return { text: clip([...head, ...sent.map((n) => n.text), ...events.map((e) => `- ${e.text}`)].join('\n')), sent }
 }
