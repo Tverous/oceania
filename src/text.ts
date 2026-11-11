@@ -1,0 +1,97 @@
+import { STAGE_LABELS } from './types.ts'
+import type { Note, Snapshot, TowerEvent } from './types.ts'
+
+/** Largest text, in UTF-8 bytes, that Tower sends to an agent. */
+export const MAX_TEXT = 9000
+
+/** ASCII only, so its length is its size in bytes. */
+const CLIPPED = '\n[Tower clipped this text.]'
+const encoder = new TextEncoder()
+/** Slack reads these characters as control sequences in mrkdwn. */
+const ENTITIES: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;' }
+
+/** Keep `text` within MAX_TEXT bytes. Cut at a character boundary and mark the cut. */
+export function clip(text: string): string {
+  if (encoder.encodeInto(text, new Uint8Array(MAX_TEXT)).read === text.length) return text
+  const { read } = encoder.encodeInto(text, new Uint8Array(MAX_TEXT - CLIPPED.length))
+  return text.slice(0, read) + CLIPPED
+}
+
+/** Escapes `raw` for Slack mrkdwn. When the result has more than `max` characters, Tower cuts it and adds `…`. */
+export function mrkdwn(raw: string, max = Infinity): string {
+  const escape = (s: string) => s.replace(/[&<>]/g, (c) => ENTITIES[c])
+  const text = escape(raw)
+  if (text.length <= max) return text
+  let cut = ''
+  for (const char of raw) {
+    const next = cut + escape(char)
+    if (next.length >= max) break
+    cut = next
+  }
+  return `${cut}…`
+}
+
+/** `<name>'s agent (<agent>)`. `name` is the member name and `agent` is the display name, for example `Copilot CLI`. */
+export function who(name: string, agent: string): string {
+  return `${name}'s agent (${agent})`
+}
+
+/** Deny reason for a write to a file in another session's diff (spec §7.4). `diff` is their patch for `path`. */
+export function overlap(owner: string, agent: string, path: string, diff: string): string {
+  return clip(`${who(owner, agent)} changed ${path} in their working copy. Their diff is below.
+Do not edit the lines in their diff.
+Use their change as the base for your change. Their change will merge into main.
+Then continue your task.
+${diff}`)
+}
+
+/** Deny reason while a session is paused (spec §7.6). `author` is the spec author's name. `channel` has no `#`. */
+export function paused(question: string, author: string, channel: string): string {
+  return clip(`Tower paused this session.
+Open question: ${question}
+${author} decides in Slack channel #${channel}.
+End your turn now. Tower starts your next turn with the decision.`)
+}
+
+/** Stop reason after a decision, without pending notes (spec §7.6). `author` is the spec author's name. */
+export function resume(issue: number, author: string, option: string): string {
+  return clip(`Decision on #${issue} by ${author}: ${option}
+Apply this decision. Then continue your task.`)
+}
+
+/** GitHub issue comment that records a decision (spec §7.6). `authorGithub` is a login without `@`. */
+export function decisionComment(option: string, authorGithub: string): string {
+  return clip(`Decision: ${option}
+@${authorGithub} decided this in Slack. Tower recorded this decision.`)
+}
+
+/** Tower note to one session (spec §7.5). */
+export function note(summary: string, instruction: string): string {
+  return clip(`Tower note: ${summary}
+Do this: ${instruction}`)
+}
+
+/** SessionStart context: the other sessions, the open conflicts, and the decisions. `viewer` is the reader's session id. */
+export function teamStatus(s: Snapshot, viewer: string): string {
+  const sessions = s.sessions.filter((v) => v.id !== viewer)
+  const open = s.conflicts.filter((c) => c.status === 'open')
+  if (!sessions.length && !open.length) return clip('Tower: no other agents are active.')
+  const name = (github: string) => s.members.find((m) => m.github === github)?.name ?? github
+  return clip(
+    [
+      'Tower: team status.',
+      ...sessions.map((v) => {
+        const task = v.task?.summary.trim().replace(/\.$/, '') ?? 'no task'
+        return `- ${who(v.name, v.agent)}, ${v.status}: ${task}. Files: ${v.files.join(', ') || 'none'}.`
+      }),
+      ...open.map((c) => `- Conflict #${c.id} (${STAGE_LABELS[c.stage]}, ${c.impact} impact): ${c.summary}`),
+      ...s.decisions.map((d) => `- Decision on #${d.issue} by ${name(d.author)}: ${d.option}`),
+    ].join('\n'),
+  )
+}
+
+/** PostToolUse context: one line per event, then the note texts. Undefined when both are empty. */
+export function updates(events: TowerEvent[], notes: Note[]): string | undefined {
+  if (!events.length && !notes.length) return undefined
+  return clip(['Tower updates:', ...events.map((e) => `- ${e.text}`), ...notes.map((n) => n.text)].join('\n'))
+}

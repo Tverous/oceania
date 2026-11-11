@@ -1,0 +1,242 @@
+import { z } from 'zod'
+import type { ZodRawShape } from 'zod'
+import type { Memory } from './memory.ts'
+import { clip, decisionComment, note, resume } from './text.ts'
+import type { Conflict, EventKind, Spec, TowerEvent } from './types.ts'
+
+/** Wait after a change in Memory before a round, so that one round handles a batch of events. */
+export const DEBOUNCE_MS = 1_500
+/** Longest wait of `settled()`. */
+export const SETTLE_MS = 90_000
+
+/** Only events that agents write start a round (spec §7.4). */
+const TRIGGERS: EventKind[] = ['task', 'diff', 'push']
+/** Longest Slack button text. */
+const MAX_OPTION = 75
+
+export interface Chat {
+  /** Posts to the shared channel. */
+  post(text: string): Promise<void>
+  /** Creates `c.channel`, invites the owners and the spec author, and posts the question. */
+  openConflict(c: Conflict): Promise<void>
+}
+
+export interface Specs {
+  get(issue: number): Promise<Spec>
+  comment(issue: number, body: string): Promise<void>
+}
+
+export interface Tool<S extends ZodRawShape = ZodRawShape> {
+  description: string
+  schema: S
+  run(args: z.infer<z.ZodObject<S>>): Promise<string>
+}
+
+export type Tools = Record<string, Tool>
+
+/** Infers the type of `run` arguments from `schema`. */
+function define<S extends ZodRawShape>(t: Tool<S>): Tool<S> {
+  return t
+}
+
+const session = z.string().describe('Session id from read_memory.')
+
+export function createTools(memory: Memory, chat: Chat, specs: Specs): Tools {
+  const need = (id: string) => {
+    if (!memory.session(id)) throw new Error(`Session ${id} does not exist. Use a session id from read_memory.`)
+  }
+  return {
+    read_memory: define({
+      description:
+        'Read Tower Memory: members, sessions, tasks, diffs, main, conflicts, notes, decisions, and the last 200 events.',
+      schema: {},
+      async run() {
+        const diffs = memory.diffs().map((d) => ({ ...d, patch: clip(d.patch) }))
+        const events = memory.eventsAfter(memory.lastEventId() - 200)
+        return JSON.stringify({ ...memory.snapshot(), diffs, notes: memory.notes(), events })
+      },
+    }),
+    get_spec: define({
+      description: 'Read a spec issue from GitHub and the decisions that it records.',
+      schema: { issue: z.number().int().describe('Issue number.') },
+      async run({ issue }) {
+        return JSON.stringify(await specs.get(issue))
+      },
+    }),
+    track_conflict: define({
+      description:
+        'Create a conflict record, or update the conflict record that has this id. ' +
+        'When you update a conflict and do not give files or issue, they stay the same.',
+      schema: {
+        id: z.number().int().optional().describe('Conflict id. Give it only to update a conflict.'),
+        sessions: z.array(session).min(1),
+        files: z.array(z.string()).optional().describe('Repo paths of the files in the conflict.'),
+        summary: z.string(),
+        stage: z.enum(['before', 'during', 'after']),
+        impact: z.enum(['low', 'high']),
+        status: z.enum(['open', 'resolved']),
+        issue: z.number().int().optional().describe('The spec issue of the conflict.'),
+      },
+      async run(c) {
+        c.sessions.forEach(need)
+        return `Conflict #${memory.trackConflict(c)}`
+      },
+    }),
+    notify: define({
+      description:
+        'Write a Tower note to one session. Tower gives the note to the agent at its next tool call. ' +
+        'A blocking note stops that tool call and shows the note.',
+      schema: {
+        session,
+        summary: z.string().describe('What the other agent does, or what changed.'),
+        instruction: z.string().describe('What this agent must do.'),
+        blocking: z.boolean(),
+      },
+      async run({ session, summary, instruction, blocking }) {
+        need(session)
+        memory.addNote(session, note(summary, instruction), blocking)
+        return `Tower wrote a note to session ${session}.`
+      },
+    }),
+    post_activity: define({
+      description: 'Post a summary to the shared Slack channel.',
+      schema: { text: z.string() },
+      async run({ text }) {
+        await chat.post(text)
+        return 'Tower posted the summary.'
+      },
+    }),
+    escalate: define({
+      description:
+        'Give a high impact conflict to the spec author. Tower opens a Slack channel with the question ' +
+        'and one button for each option. Then Tower pauses the sessions in the conflict.',
+      schema: {
+        conflict: z.number().int().describe('Conflict id. The conflict must have an issue.'),
+        question: z.string(),
+        options: z.array(z.string().max(MAX_OPTION)).min(2).max(3),
+      },
+      async run({ conflict: id, question, options }) {
+        const conflict = memory.conflict(id)
+        if (!conflict) throw new Error(`Conflict #${id} does not exist.`)
+        if (conflict.issue === undefined) {
+          throw new Error(`Conflict #${id} has no issue. Use track_conflict to add the issue.`)
+        }
+        if (conflict.channel) throw new Error(`Conflict #${id} is already in #${conflict.channel}.`)
+        const { author } = await specs.get(conflict.issue)
+        const member = memory.memberByGithub(author)
+        if (!member) throw new Error(`The spec author ${author} is not a Tower member.`)
+        if (!member.slackId) throw new Error(`The spec author ${member.name} has no Slack user.`)
+        const channel = `tower-${conflict.issue}-${Date.now().toString(36)}`
+        await chat.openConflict({ ...conflict, channel, author, question, options })
+        memory.escalate(id, { channel, author, question, options })
+        return `Opened #${channel}`
+      },
+    }),
+  }
+}
+
+/** The prompt of one round: the events after the last round. */
+export function roundPrompt(events: TowerEvent[]): string {
+  return [
+    'Tower events after the last round:',
+    ...events.map((e) => `- [${e.kind}${e.session ? `, session ${e.session}` : ''}] ${e.text}`),
+    'Read Memory. Then apply the rules to these events and to each open conflict.',
+  ].join('\n')
+}
+
+/**
+ * Runs one judge round for each batch of agent events (spec §7.4). Starts at the latest event,
+ * so old events do not start a round after a restart. At most one round runs at a time.
+ */
+export function startMaster(
+  memory: Memory,
+  tools: Tools,
+  judge: (prompt: string, tools: Tools) => Promise<void>,
+  debounceMs = DEBOUNCE_MS,
+): { stop(): void; settled(): Promise<void> } {
+  let cursor = memory.lastEventId()
+  let timer: NodeJS.Timeout | undefined
+  let running = false
+  let stopped = false
+  const waiters = new Set<() => void>()
+  const pending = () => memory.eventsAfter(cursor).some((e) => TRIGGERS.includes(e.kind))
+  const busy = () => running || (!stopped && pending())
+  const release = () => {
+    for (const done of [...waiters]) done()
+  }
+
+  function schedule(): void {
+    if (stopped || running || timer || !pending()) return
+    timer = setTimeout(round, debounceMs)
+  }
+
+  async function round(): Promise<void> {
+    timer = undefined
+    running = true
+    const events = memory.eventsAfter(cursor)
+    cursor = events.at(-1)?.id ?? cursor
+    try {
+      await judge(roundPrompt(events), tools)
+    } catch (error) {
+      console.error('Tower: the judge round failed.', error)
+    }
+    running = false
+    schedule()
+    if (!busy()) release()
+  }
+
+  const off = memory.onChange(schedule)
+  return {
+    stop() {
+      stopped = true
+      off()
+      clearTimeout(timer)
+      timer = undefined
+      if (!busy()) release()
+    },
+    settled() {
+      if (!busy()) return Promise.resolve()
+      return new Promise((resolve) => {
+        const done = () => {
+          clearTimeout(limit)
+          waiters.delete(done)
+          resolve()
+        }
+        const limit = setTimeout(done, SETTLE_MS)
+        waiters.add(done)
+      })
+    },
+  }
+}
+
+type DecideResult = { ok: true; option: string } | { ok: false; reason: string }
+
+/**
+ * Records the click of `slackUser` on option `optionIndex` in `channel` (spec §7.6).
+ * Memory first, then the GitHub comment. A failed comment does not change the decision.
+ */
+export async function decide(
+  memory: Memory,
+  specs: Specs,
+  channel: string,
+  optionIndex: number,
+  slackUser: string,
+): Promise<DecideResult> {
+  const c = memory.conflictByChannel(channel)
+  if (!c || c.decision !== undefined) return { ok: false, reason: 'This question already has a decision.' }
+  // `escalate` sets the issue, the author, and the options together with the channel.
+  const issue = c.issue as number
+  const github = c.author as string
+  const author = memory.memberByGithub(github)
+  const name = author?.name ?? github
+  if (author?.slackId !== slackUser) return { ok: false, reason: `Only ${name} can decide this question.` }
+  const option = c.options?.[optionIndex]
+  if (option === undefined) return { ok: false, reason: 'This option does not exist.' }
+  memory.decide(channel, option, resume(issue, name, option))
+  try {
+    await specs.comment(issue, decisionComment(option, github))
+  } catch (error) {
+    console.error(`Tower: the decision comment on #${issue} failed. The decision stays.`, error)
+  }
+  return { ok: true, option }
+}

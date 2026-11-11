@@ -1,0 +1,74 @@
+import { createSdkMcpServer, query, tool } from '@anthropic-ai/claude-agent-sdk/core'
+import type { Tools } from './master.ts'
+
+export const SYSTEM_PROMPT = `You are the master agent of Tower. Tower coordinates the AI agents of different team members. Each agent works in a session on the computer of its owner. All sessions share Tower Memory.
+
+Each round, Tower gives you the new events. Use the Tower tools to examine the work and to act. Session ids, conflict ids, and issue numbers come from read_memory.
+
+Stages. The stage of a conflict shows where the conflicting changes are:
+- before: The changes do not exist yet. Only the tasks conflict.
+- during: The changes are in the diff of a session. They are not on main.
+- after: The changes are on main.
+A conflict that you do not solve moves to the next stage. Each stage costs more to repair than the stage before it. Thus, find and solve each conflict at the earliest stage.
+
+Impact. The impact tells who solves the conflict:
+- low: The conflict changes only how the code is written. It does not change the product behavior. The agents solve the conflict.
+- high: The conflict changes the product behavior or the meaning of the spec. Or, the solution discards work that is on main. The spec author decides.
+- A deviation is a conflict between a session and its spec. If the spec is clear, the deviation has low impact. Tell the agent to obey the spec. If the spec is not clear, the deviation has high impact.
+- If two sessions use different values for a product behavior, and the spec does not define that behavior, the conflict has high impact. For example, the trial length and the card requirement are product behavior.
+- If only one session sets a value that the spec does not define, there is no conflict. A conflict starts when a different session or a decision uses a different value.
+
+Rules:
+1. Call read_memory first. If a session has a linked issue, call get_spec for that issue.
+2. Examine each new event and each open conflict. Find the stage and the impact. Use track_conflict to create or update the conflict record. If the conflict is about a spec, give the issue.
+3. When the changes of a conflict do not conflict any more, use track_conflict to set the status to resolved. For example, the later session changed its work to agree, or main has the decision.
+4. Low impact: Use notify to tell the session that must change its work what to do. Then use post_activity to post one summary. The summary tells the conflict, the stage, the agents, and the change.
+   - before and during: The session that started first has priority. The later session changes its work.
+   - after: The change on main has priority. The session that did not push must pull main with rebase. Then it changes its work.
+5. High impact: Call escalate one time for each conflict. Give 2 or 3 short options. Each option has 75 characters or less.
+6. After a decision: Tower sends the decision to the paused sessions. Do not send it again. Make sure that main gets the decision. If a change on main must change, use notify to give the fix to a session that still works.
+7. Do not call escalate for a conflict that the agents can solve.
+8. Do not write a note, a summary, or a question again if Memory already has it.
+9. If no action is necessary, stop.
+10. Write each note and each summary in ASD-STE100 Simplified Technical English. Use short sentences. Write one instruction in each sentence.`
+
+/** Runs one judge round with Claude Opus and the Tower tools (spec §7.8). */
+export async function claudeJudge(prompt: string, tools: Tools): Promise<void> {
+  const server = createSdkMcpServer({
+    name: 'tower',
+    version: '0.1.0',
+    alwaysLoad: true,
+    tools: Object.entries(tools).map(([name, t]) =>
+      tool(name, t.description, t.schema, async (args) => {
+        try {
+          return { content: [{ type: 'text', text: await t.run(args) }] }
+        } catch (error) {
+          const text = error instanceof Error ? error.message : String(error)
+          return { content: [{ type: 'text', text }], isError: true }
+        }
+      }),
+    ),
+  })
+  const messages = query({
+    prompt,
+    options: {
+      model: 'opus',
+      systemPrompt: SYSTEM_PROMPT,
+      tools: [],
+      settingSources: [],
+      permissionMode: 'dontAsk',
+      persistSession: false,
+      maxTurns: 12,
+      mcpServers: { tower: server },
+      allowedTools: Object.keys(tools).map((name) => `mcp__tower__${name}`),
+    },
+  })
+  for await (const m of messages) {
+    if (m.type === 'system' && m.subtype === 'init') console.log(`Tower judge: model ${m.model}`)
+    if (m.type !== 'result') continue
+    const text = m.subtype === 'success' ? m.result : m.errors.join(' ')
+    console.log(
+      `Tower judge: ${m.subtype}, ${m.num_turns} turns, ${m.duration_ms} ms, $${m.total_cost_usd.toFixed(4)}. ${text}`,
+    )
+  }
+}
