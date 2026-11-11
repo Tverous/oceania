@@ -9,7 +9,8 @@ REPO=Tverous/acme-pricing
 
 rm -f "$TOWER"/tower.db*
 git -C "$ACME/main" push --force origin "$SEED:main"
-for clone in alice main; do
+for clone in alice main bob; do
+  [ -d "$ACME/$clone" ] || continue
   git -C "$ACME/$clone" fetch --quiet
   git -C "$ACME/$clone" reset --quiet --hard origin/main
   git -C "$ACME/$clone" clean -fd --quiet
@@ -17,4 +18,6 @@ done
 for id in $(gh api "repos/$REPO/issues/1/comments" --paginate --jq '.[] | select(.body | startswith("Decision:")) | .id'); do
   gh api --silent -X DELETE "repos/$REPO/issues/comments/$id"
 done
-echo "Laptop B: cd ~/acme/bob && git fetch && git reset --hard origin/main && git clean -fd"
+if [ ! -d "$ACME/bob" ]; then
+  echo "Laptop B: cd ~/acme/bob && git fetch && git reset --hard origin/main && git clean -fd"
+fi
