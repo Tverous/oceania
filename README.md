@@ -29,7 +29,7 @@ Tower has three parts:
 
 1. **`tower hook`** (`src/adapter.ts`). Each agent hook runs this command. It reads the hook payload, adds local git data (repo, base commit, diff, latest known main), sends both to Tower, and prints the answer in the format of that agent. It uses only Node built-in modules, so a computer that runs only an agent does not need `npm install`. If Tower is not available, the command prints nothing and exits with code 0, so the agent continues to work.
 2. **Tower server** (`src/cli.ts serve`). One Node process keeps the Memory in `tower.db`, receives hook requests on `127.0.0.1:4100`, runs the master agent, connects to Slack in Socket Mode, and uses the `gh` CLI for GitHub.
-3. **Master agent** (`src/master.ts`, `src/judge.ts`). Each new task, diff, or push starts one judge round. A judge round uses the Claude Agent SDK with Claude Opus and these tools: `read_memory`, `get_spec`, `track_conflict`, `notify`, `post_activity`, `escalate`, `check_merge`, `run_in_worktree`.
+3. **Master agent** (`src/master.ts`, `src/judge.ts`). Each new task, diff, or push starts one judge round. A judge round uses the Claude Agent SDK with Claude Opus and these tools: `read_memory`, `get_spec`, `track_conflict`, `notify`, `post_activity`, `escalate`, `check_merge`, `run_in_worktree`. Every 60 seconds, the master agent also runs a deterministic check. When a working session has no event for 10 minutes, Tower adds one `stall` event: `<who> may be stalled.` A new event from that session ends the stall. A `stall` event does not start a judge round, but the next round gets it.
 
 ## Conflict lifecycle
 
