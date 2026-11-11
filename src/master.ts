@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import type { ZodRawShape } from 'zod'
 import type { Memory } from './memory.ts'
+import type { Shadow } from './shadow.ts'
 import { clip, decisionComment, note, resume } from './text.ts'
 import type { Conflict, EventKind, Spec, TowerEvent } from './types.ts'
 
@@ -41,7 +42,7 @@ function define<S extends ZodRawShape>(t: Tool<S>): Tool<S> {
 
 const session = z.string().describe('Session id from read_memory.')
 
-export function createTools(memory: Memory, chat: Chat, specs: Specs): Tools {
+export function createTools(memory: Memory, chat: Chat, specs: Specs, shadow: Shadow): Tools {
   const need = (id: string) => {
     if (!memory.session(id)) throw new Error(`Session ${id} does not exist. Use a session id from read_memory.`)
   }
@@ -130,6 +131,20 @@ export function createTools(memory: Memory, chat: Chat, specs: Specs): Tools {
         await chat.openConflict({ ...conflict, channel, author, question, options })
         memory.escalate(id, { channel, author, question, options })
         return `Opened #${channel}`
+      },
+    }),
+    check_merge: define({
+      description:
+        'Merge the diffs of two sessions in the same repo with git merge-tree. ' +
+        'The result tells if the diffs merge, or which files conflict. No work tree changes.',
+      schema: { a: session, b: session },
+      async run({ a, b }) {
+        need(a)
+        need(b)
+        const result = await shadow.merge(a, b)
+        if (result.status === 'missing') return `Session ${result.session} has no shadow ref yet.`
+        if (result.status === 'clean') return `The diffs of sessions ${a} and ${b} merge with no conflicts.`
+        return `The diffs of sessions ${a} and ${b} conflict in: ${result.files.join(', ')}`
       },
     }),
   }
