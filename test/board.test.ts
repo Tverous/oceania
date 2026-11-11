@@ -111,6 +111,76 @@ test('homeView shows the open question, then the decision', () => {
   assert.ok(!json.includes('Open question'))
 })
 
+test('homeView shows the lifecycle of each conflict, and steps with the same stage and status collapse', (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-11-11T21:03:20.000Z') })
+  const time = (minute: number) => {
+    const iso = `2026-11-11T21:0${minute}:00.000Z`
+    return `<!date^${Date.parse(iso) / 1000}^{time}|${iso}>`
+  }
+  const m = setup()
+  m.register({ ...a, main: 'm1' })
+  m.register({ ...b, main: 'm1' })
+  const terms = {
+    sessions: ['a', 'b'],
+    files: ['src/plans.ts'],
+    summary: 'The tasks use different trial terms.',
+    stage: 'before' as const,
+    impact: 'low' as const,
+    status: 'open' as const,
+    issue: 1,
+  }
+  const high = m.trackConflict(terms)
+  const page = {
+    sessions: ['a', 'b'],
+    files: ['src/pricing.ts'],
+    summary: 'Both tasks change the pricing page.',
+    stage: 'before' as const,
+    impact: 'low' as const,
+    status: 'open' as const,
+  }
+  const low = m.trackConflict(page)
+  t.mock.timers.tick(60_000)
+  m.trackConflict({ ...terms, id: high, impact: 'high' })
+  m.observe('a', { files: ['src/plans.ts', 'src/pricing.ts'], patch: 'P1', main: 'm1' })
+  m.trackOverlap('b', 'a', 'src/pricing.ts')
+  t.mock.timers.tick(60_000)
+  m.observe('a', { files: [], patch: '', main: 'm2' })
+  t.mock.timers.tick(60_000)
+  m.trackConflict({ ...page, id: low, stage: 'after', status: 'resolved' })
+  m.trackConflict({ ...terms, id: high, stage: 'after', impact: 'high', status: 'resolved' })
+  const sections = texts(homeView(m.snapshot()).blocks)
+  const trail = (summary: string) => sections.find((s) => s.includes(summary))?.split('\n')[2]
+  assert.equal(
+    trail('Both tasks change the pricing page.'),
+    `Before ${time(3)} → During ${time(4)} → After ${time(5)} → Resolved ${time(6)}`,
+  )
+  // The impact changed in the before stage. The board shows the first time of each stage.
+  assert.equal(trail('The tasks use different trial terms.'), `Before ${time(3)} → After ${time(5)} → Resolved ${time(6)}`)
+})
+
+test('homeView shows the newest steps of a long lifecycle', () => {
+  const m = setup()
+  m.register(a)
+  m.register(b)
+  const c = {
+    sessions: ['a', 'b'],
+    summary: 'Both tasks change the pricing page.',
+    impact: 'low' as const,
+    status: 'open' as const,
+  }
+  const id = m.trackConflict({ ...c, stage: 'before' })
+  for (let i = 0; i < 10; i++) m.trackConflict({ ...c, id, stage: i % 2 ? 'before' : 'during' })
+  m.trackConflict({ ...c, id, stage: 'after', status: 'resolved' })
+  const lines = texts(homeView(m.snapshot()).blocks)
+    .find((s) => s.includes('Both tasks change the pricing page.'))
+    ?.split('\n')
+  const steps = lines?.[2].split(' → ') ?? []
+  assert.equal(steps[0], '…')
+  assert.ok(steps.length < 12, `${steps.length} steps`)
+  assert.ok(steps.at(-1)?.startsWith('Resolved <!date^'))
+  assert.ok(steps.at(-2)?.startsWith('Before <!date^'))
+})
+
 test('homeView shows the empty state', () => {
   const json = JSON.stringify(homeView(new Memory(':memory:').snapshot()))
   assert.ok(json.includes('No agents are active.'))
@@ -141,6 +211,17 @@ test('homeView stays within Slack limits', () => {
       issue: 1,
     })
     m.escalate(id, { channel: `oceania-1-c${id}`, author: 'Tverous', question: 'q'.repeat(5000), options: ['A', 'B'] })
+    // A long lifecycle: the stage changes many times.
+    for (let j = 0; j < 20; j++) {
+      m.trackConflict({
+        id,
+        sessions: ['s58', 's59'],
+        summary: '&'.repeat(5000),
+        stage: j % 2 ? 'during' : 'after',
+        impact: 'high',
+        status: j % 3 ? 'open' : 'resolved',
+      })
+    }
   }
   const view = homeView(m.snapshot())
   assert.ok(view.blocks.length <= 100, `${view.blocks.length} blocks`)

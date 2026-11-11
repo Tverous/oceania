@@ -1,5 +1,5 @@
 import type { types } from '@slack/bolt'
-import { mrkdwn, who } from './text.ts'
+import { lifecycle, mrkdwn, who } from './text.ts'
 import { STAGE_LABELS } from './types.ts'
 import type { Conflict, SessionView, Snapshot } from './types.ts'
 
@@ -7,11 +7,13 @@ import type { Conflict, SessionView, Snapshot } from './types.ts'
 const MAX_BLOCKS = 100
 /** The title, the two list titles, the divider, and one note or empty state for each list. */
 const FIXED_BLOCKS = 6
+/** Most steps in the lifecycle line of one conflict. One step has at most about 60 characters. */
+const STEPS = 6
 /**
- * Most characters for one text from Memory. A section has three such texts and short labels,
- * so it stays within the Slack limit of 3,000 characters for one text.
+ * Most characters for one text from Memory. A section has three such texts, one lifecycle line,
+ * and short labels, so it stays within the Slack limit of 3,000 characters for one text.
  */
-const FIELD = 900
+const FIELD = 800
 
 /** The App Home view of the team status (spec §7.10). Open conflicts come first. Each list shows the newest items first. */
 export function homeView(s: Snapshot): types.HomeView {
@@ -78,6 +80,7 @@ function conflictText(c: Conflict, s: Snapshot): string {
   const lines = [
     `*Conflict #${c.id}*: ${fit(c.summary)}`,
     `${STAGE_LABELS[c.stage]} · ${c.impact} impact · ${c.status}`,
+    steps(c),
     fit(`Agents: ${agents.join(', ')}`),
   ]
   if (c.decision !== undefined) lines.push(fit(`Decision: ${c.decision}`))
@@ -86,12 +89,22 @@ function conflictText(c: Conflict, s: Snapshot): string {
 }
 
 /**
+ * The lifecycle line of a conflict, for example `Before 9:03 PM → During 9:04 PM → Resolved 9:06 PM`.
+ * A long lifecycle shows only the newest steps, after `…`.
+ */
+function steps(c: Conflict): string {
+  const all = lifecycle(c.history)
+  const shown = all.slice(-STEPS).map((h) => `${h.name} ${date(h.at, '{time}')}`)
+  return (all.length > STEPS ? ['…', ...shown] : shown).join(' → ')
+}
+
+/**
  * Slack date: the local time of the viewer, with the ISO time as the fallback text.
  * The board shows minutes, so the time starts at the minute. The view then changes only once each minute.
  */
-function date(ms: number): string {
+function date(ms: number, format = '{date_short_pretty} {time}'): string {
   const start = minute(ms)
-  return `<!date^${start / 1000}^{date_short_pretty} {time}|${new Date(start).toISOString()}>`
+  return `<!date^${start / 1000}^${format}|${new Date(start).toISOString()}>`
 }
 
 function fit(raw: string): string {

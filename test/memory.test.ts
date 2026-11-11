@@ -195,6 +195,66 @@ test('trackConflict resolves a conflict with a resolved event', () => {
   assert.ok(m.eventsAfter(0).at(-1)?.text.startsWith('Conflict #1 resolved:'))
 })
 
+test('Memory records each change of stage, impact, and status of a conflict', (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-11-11T21:03:10.000Z') })
+  const at = (minute: number) => Date.parse(`2026-11-11T21:0${minute}:10.000Z`)
+  const m = setup()
+  m.register({ ...a, main: 'm1' })
+  m.register({ ...b, main: 'm1' })
+  const terms = {
+    sessions: ['a', 'b'],
+    files: ['src/plans.ts'],
+    summary: 'The tasks use different trial terms.',
+    stage: 'before' as const,
+    impact: 'low' as const,
+    status: 'open' as const,
+    issue: 1,
+  }
+  const high = m.trackConflict(terms)
+  m.trackConflict({ ...terms, id: high, impact: 'high' })
+  // Only the summary changes, so the history does not change.
+  m.trackConflict({ ...terms, id: high, impact: 'high', summary: 'Alice uses 14 days. Bob uses 30 days.' })
+  const page = {
+    sessions: ['a', 'b'],
+    files: ['src/pricing.ts'],
+    summary: 'Both tasks change the pricing page.',
+    stage: 'before' as const,
+    impact: 'low' as const,
+    status: 'open' as const,
+  }
+  const low = m.trackConflict(page)
+  t.mock.timers.tick(60_000)
+  m.observe('a', { files: ['src/pricing.ts'], patch: 'P1', main: 'm1' })
+  // The live check moves the conflict to during once.
+  assert.equal(m.trackOverlap('b', 'a', 'src/pricing.ts'), low)
+  assert.equal(m.trackOverlap('b', 'a', 'src/pricing.ts'), low)
+  t.mock.timers.tick(60_000)
+  // The push moves only the conflict on src/pricing.ts to after.
+  m.observe('a', { files: [], patch: '', main: 'm2' })
+  t.mock.timers.tick(60_000)
+  m.trackConflict({ ...page, id: low, stage: 'after', status: 'resolved' })
+  const termsHistory = [
+    { stage: 'before', impact: 'low', status: 'open', at: at(3) },
+    { stage: 'before', impact: 'high', status: 'open', at: at(3) },
+  ]
+  const lifecycle = [
+    { stage: 'before', impact: 'low', status: 'open', at: at(3) },
+    { stage: 'during', impact: 'low', status: 'open', at: at(4) },
+    { stage: 'after', impact: 'low', status: 'open', at: at(5) },
+    { stage: 'after', impact: 'low', status: 'resolved', at: at(6) },
+  ]
+  assert.deepEqual(m.conflict(high)?.history, termsHistory)
+  assert.deepEqual(m.conflict(low)?.history, lifecycle)
+  assert.deepEqual(
+    m.conflicts().map((c) => c.history),
+    [termsHistory, lifecycle],
+  )
+  assert.deepEqual(
+    m.snapshot().conflicts.map((c) => c.history),
+    [termsHistory, lifecycle],
+  )
+})
+
 test('escalate pauses every session in the conflict', () => {
   const m = setup()
   escalated(m)

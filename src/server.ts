@@ -2,11 +2,13 @@ import { createServer as createHttpServer } from 'node:http'
 import type { Server } from 'node:http'
 import { relative, resolve, sep } from 'node:path'
 import { json } from 'node:stream/consumers'
+import type { Delivered, FeedItem } from './feed.ts'
 import { filePatch } from './git.ts'
+import { feed, log } from './log.ts'
 import type { Memory } from './memory.ts'
 import { clip, overlap, paused, pending, teamStatus, updates } from './text.ts'
 import type { Delivery } from './text.ts'
-import type { AgentKind, GitInfo, HookDecision, Note } from './types.ts'
+import type { AgentKind, Conflict, EventKind, GitInfo, HookDecision, Note, OceaniaEvent } from './types.ts'
 
 /** Longest time that `Stop` waits for a paused session to resume. */
 export const HOLD_MS = 480_000
@@ -21,6 +23,10 @@ const PATCH_PATH = /^\*\*\* (?:Add File|Update File|Delete File|Move to): (.+)$/
 
 /** For each Memory, the last Stop reason that Oceania sent to each session. Copilot sends that reason back as a prompt. */
 const lastBlock = new WeakMap<Memory, Map<string, string>>()
+/** For each Memory, the conflict of the last pause that the feed showed for each session. */
+const shownPause = new WeakMap<Memory, Map<string, number>>()
+/** The events of other agents that the feed shows when a PostToolUse context gives them to an agent. */
+const NEWS: EventKind[] = ['task', 'push']
 
 /** The hook payload fields that Oceania reads. Copilot with PascalCase events sends the same fields as Claude Code. */
 export interface HookPayload {
@@ -58,9 +64,13 @@ export interface HookOptions {
   observed?: (session: string, git: GitInfo) => void
 }
 
+/** Reports one text that Oceania sends to the agent to the feed. It never throws, and it does not change the response. */
+type Tell = (told: Delivered & { text: string }) => void
+
 /**
  * Applies one hook event to Memory and returns what the agent gets (spec §7.2 and §7.4).
  * `signal` aborts when the request ends before the response. Then a `Stop` hold ends and takes no notes.
+ * Each text for the agent goes to the feed as a delivery.
  */
 export async function handleHook(
   memory: Memory,
@@ -70,6 +80,14 @@ export async function handleHook(
 ): Promise<HookDecision> {
   const { payload, git } = req
   const id = payload.session_id
+  const tell: Tell = (told) => {
+    try {
+      const to = memory.member(req.member)?.name ?? req.member
+      feed({ type: 'delivery', at: Date.now(), session: id, to, ...told })
+    } catch (error) {
+      log('Oceania: the feed report failed.', error)
+    }
+  }
   memory.register({
     id,
     agent: AGENT_NAMES[req.agent],
@@ -77,8 +95,15 @@ export async function handleHook(
     ...(git && { repo: git.repo, root: git.root, base: git.base, main: git.main }),
   })
   switch (payload.hook_event_name) {
-    case 'SessionStart':
-      return { context: teamStatus(memory.snapshot(), id) }
+    case 'SessionStart': {
+      const s = memory.snapshot()
+      const context = teamStatus(s, id)
+      const agents = s.sessions
+        .filter((v) => v.id !== id)
+        .map((v) => ({ name: v.name, status: v.status, task: v.task?.summary }))
+      tell({ kind: 'status', text: context, agents, conflicts: s.conflicts.filter((c) => c.status === 'open').length })
+      return { context }
+    }
     case 'UserPromptSubmit': {
       const prompt = payload.prompt ?? ''
       const sent = lastBlock.get(memory)
@@ -93,32 +118,40 @@ export async function handleHook(
       return {}
     }
     case 'PreToolUse':
-      return preToolUse(memory, id, payload)
+      return preToolUse(memory, id, payload, tell)
     case 'PostToolUse': {
       if (git) {
         memory.observe(id, git)
         opts.observed?.(id, git)
       }
+      const events = memory.readEvents(id)
       const notes = memory.takeNotes(id, false)
-      const context = send(memory, notes, updates(memory.readEvents(id), notes))
+      const context = send(memory, notes, updates(events, notes), tell)
+      const news = events.filter((e) => NEWS.includes(e.kind)).map((e) => e.text)
+      if (context !== undefined && news.length) tell({ kind: 'update', text: context, events: news })
       return context === undefined ? {} : { context }
     }
     case 'Stop':
-      return stop(memory, id, opts, signal)
+      return stop(memory, id, opts, tell, signal)
     default:
       return {}
   }
 }
 
-function preToolUse(memory: Memory, id: string, payload: HookPayload): HookDecision {
+function preToolUse(memory: Memory, id: string, payload: HookPayload, tell: Tell): HookDecision {
   const pause = memory.pausedBy(id)
   if (pause) {
     const author = pause.author as string
     const name = memory.memberByGithub(author)?.name ?? author
-    return { deny: paused(pause.question as string, name, pause.channel as string) }
+    const deny = paused(pause.question as string, name, pause.channel as string)
+    // An agent can try several tool calls while it is paused. The feed shows the pause once.
+    const shown = shownPause.getOrInsertComputed(memory, () => new Map())
+    if (shown.get(id) !== pause.id) tell({ kind: 'paused', text: deny, author: name })
+    shown.set(id, pause.id)
+    return { deny }
   }
   const notes = memory.takeNotes(id, true)
-  if (notes.length) return { deny: send(memory, notes, pending(notes)) }
+  if (notes.length) return { deny: send(memory, notes, pending(notes), tell) }
 
   const self = memory.session(id)
   if (!self?.root || !self.repo) return {}
@@ -140,14 +173,17 @@ function preToolUse(memory: Memory, id: string, payload: HookPayload): HookDecis
     const shared = paths.filter((path) => diff.files.includes(path) && !own.includes(path))
     if (!shared.length || memory.seen(id, owner.id) >= diff.version) continue
     memory.markSeen(id, owner.id, diff.version)
-    for (const path of shared) memory.trackOverlap(id, owner.id, path)
     const name = memory.member(owner.member)?.name ?? owner.member
-    return { deny: clip(shared.map((path) => overlap(name, owner.agent, path, filePatch(diff.patch, path))).join('\n')) }
+    const deny = clip(shared.map((path) => overlap(name, owner.agent, path, filePatch(diff.patch, path))).join('\n'))
+    // The feed shows the blocked write first, then the conflict that it starts.
+    tell({ kind: 'overlap', text: deny, owner: name, files: shared })
+    for (const path of shared) memory.trackOverlap(id, owner.id, path)
+    return { deny }
   }
   return {}
 }
 
-async function stop(memory: Memory, id: string, opts: HookOptions, signal?: AbortSignal): Promise<HookDecision> {
+async function stop(memory: Memory, id: string, opts: HookOptions, tell: Tell, signal?: AbortSignal): Promise<HookDecision> {
   if (!memory.pausedBy(id)) memory.setStatus(id, 'idle')
   await opts.settled()
   // When the request ended, the notes stay for the next Stop or PreToolUse.
@@ -156,7 +192,7 @@ async function stop(memory: Memory, id: string, opts: HookOptions, signal?: Abor
   if (signal?.aborted) return {}
   const notes = [...memory.takeNotes(id, true), ...memory.takeNotes(id, false)]
   if (!notes.length) return {}
-  const block = send(memory, notes, pending(notes))
+  const block = send(memory, notes, pending(notes), tell, true)
   memory.setStatus(id, 'working')
   lastBlock.getOrInsertComputed(memory, () => new Map()).set(id, block)
   return { block }
@@ -180,10 +216,84 @@ function resumed(memory: Memory, session: string, holdMs: number, signal?: Abort
   })
 }
 
-/** Returns the text of `delivery`. The `taken` notes that are not in the text become pending again. */
-function send<T>(memory: Memory, taken: Note[], delivery: Delivery<T>): T {
+/**
+ * Returns the text of `delivery`, and tells the feed about each note in it. The `taken` notes that are not
+ * in the text become pending again. A Stop `block` that starts with a decision resumes the agent.
+ */
+function send<T>(memory: Memory, taken: Note[], delivery: Delivery<T>, tell: Tell, block = false): T {
   memory.undeliver(taken.filter((n) => !delivery.sent.includes(n)).map((n) => n.id))
+  delivery.sent.forEach((n, i) => {
+    const resume = block && i === 0 && n.text.startsWith('Decision on #')
+    tell({ kind: resume ? 'resume' : 'note', text: n.text })
+  })
   return delivery.text
+}
+
+/**
+ * Feeds each new Memory event, from the latest event at the call. Feeds each conflict when its stage, impact,
+ * or status changes, also when a push moves it to after without a conflict event. The result stops it.
+ * A diff is fed only when its files change. A push empties the files, so the empty diff after a push is not fed.
+ */
+export function reportEvents(memory: Memory): () => void {
+  let last = memory.lastEventId()
+  const step = (c: Conflict) => `${c.stage} ${c.impact} ${c.status}`
+  const shown = new Map(memory.conflicts().map((c) => [c.id, step(c)]))
+  /** The files of the last diff or push line of each session. */
+  const files = new Map<string, string>()
+  return memory.onChange(() => {
+    try {
+      for (const event of memory.eventsAfter(last)) {
+        last = event.id
+        const item = eventItem(memory, event)
+        if (item?.type === 'diff' || item?.type === 'push') {
+          const now = item.type === 'diff' ? item.files.join('\n') : ''
+          const same = item.type === 'diff' && files.get(event.session as string) === now
+          files.set(event.session as string, now)
+          if (same) continue
+        }
+        if (item) feed(item)
+      }
+      for (const c of memory.conflicts()) {
+        if (shown.get(c.id) === step(c)) continue
+        shown.set(c.id, step(c))
+        feed({ type: 'conflict', at: c.updated, conflict: c })
+      }
+    } catch (error) {
+      log('Oceania: the feed report of a Memory change failed.', error)
+    }
+  })
+}
+
+/** The feed item of one Memory event. The conflict changes are not here: reportEvents feeds them. */
+function eventItem(memory: Memory, e: OceaniaEvent): FeedItem | undefined {
+  const { at } = e
+  if (e.kind === 'decision') {
+    const issue = /^Decision on #(\d+) /.exec(e.text)?.[1]
+    const d = issue === undefined ? undefined : memory.decisions(Number(issue)).at(-1)
+    if (!d) return undefined
+    const author = memory.memberByGithub(d.author)?.name ?? d.author
+    return { type: 'decision', at, author, issue: d.issue, option: d.option }
+  }
+  // The other events are of one session. The pause event of `escalate` has no session: master.ts feeds the question.
+  const s = e.session === undefined ? undefined : memory.session(e.session)
+  if (!s) return undefined
+  const name = memory.member(s.member)?.name ?? s.member
+  switch (e.kind) {
+    case 'join':
+      return { type: 'join', at, name, agent: s.agent }
+    case 'task': {
+      const summary = memory.snapshot().sessions.find((v) => v.id === s.id)?.task?.summary ?? ''
+      return { type: 'task', at, name, summary }
+    }
+    case 'diff':
+      return { type: 'diff', at, name, files: memory.diffs().find((d) => d.session === s.id)?.files ?? [] }
+    case 'push':
+      return { type: 'push', at, name, files: memory.pushes().findLast((p) => p.session === s.id)?.files ?? [] }
+    case 'stall':
+      return { type: 'stall', at, name }
+    default:
+      return undefined
+  }
 }
 
 /** The hook endpoint: `POST /hook` with a HookRequest. Other requests get 404. */
@@ -210,7 +320,7 @@ export function createServer(memory: Memory, opts: HookOptions): Server {
       if (ended.signal.aborted) return
       res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(decision))
     } catch (error) {
-      console.error(error)
+      log('Oceania: the hook request failed.', error)
       res.writeHead(500).end()
     }
   })

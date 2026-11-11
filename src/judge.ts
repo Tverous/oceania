@@ -1,4 +1,5 @@
 import { createSdkMcpServer, query, tool } from '@anthropic-ai/claude-agent-sdk/core'
+import { log } from './log.ts'
 import type { Tools } from './master.ts'
 
 export const SYSTEM_PROMPT = `You are the master agent of Oceania. Oceania coordinates the AI agents of different team members. Each agent works in a session on the computer of its owner. All sessions share Oceania Memory.
@@ -42,7 +43,10 @@ Rules:
 13. If no action is necessary, stop.
 14. Write each note and each summary in ASD-STE100 Simplified Technical English. Use short sentences. Write one instruction in each sentence.`
 
-/** Runs one judge round with Claude Opus and the Oceania tools (spec §7.8). `signal` stops the query. */
+/**
+ * Runs one judge round with Claude Opus and the Oceania tools (spec §7.8). `signal` stops the query.
+ * The tool calls and the result text go to the Oceania log. startMaster feeds the round line.
+ */
 export async function claudeJudge(prompt: string, tools: Tools, signal?: AbortSignal): Promise<void> {
   const abortController = new AbortController()
   signal?.addEventListener('abort', () => abortController.abort(signal.reason), { once: true })
@@ -52,9 +56,11 @@ export async function claudeJudge(prompt: string, tools: Tools, signal?: AbortSi
     alwaysLoad: true,
     tools: Object.entries(tools).map(([name, t]) =>
       tool(name, t.description, t.schema, async (args) => {
+        log(`Oceania judge: ${name}`, JSON.stringify(args))
         try {
           return { content: [{ type: 'text', text: await t.run(args) }] }
         } catch (error) {
+          log(`Oceania judge: ${name} failed.`, error)
           const text = error instanceof Error ? error.message : String(error)
           return { content: [{ type: 'text', text }], isError: true }
         }
@@ -77,11 +83,9 @@ export async function claudeJudge(prompt: string, tools: Tools, signal?: AbortSi
     },
   })
   for await (const m of messages) {
-    if (m.type === 'system' && m.subtype === 'init') console.log(`Oceania judge: model ${m.model}`)
+    if (m.type === 'system' && m.subtype === 'init') log(`Oceania judge: model ${m.model}`)
     if (m.type !== 'result') continue
     const text = m.subtype === 'success' ? m.result : m.errors.join(' ')
-    console.log(
-      `Oceania judge: ${m.subtype}, ${m.num_turns} turns, ${m.duration_ms} ms, $${m.total_cost_usd.toFixed(4)}. ${text}`,
-    )
+    log(`Oceania judge: ${m.subtype}, ${m.num_turns} turns, ${m.duration_ms} ms, $${m.total_cost_usd.toFixed(4)}.`, text)
   }
 }

@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
+import { log } from './log.ts'
 import { MAX_TEXT } from './text.ts'
 import type { GitInfo } from './types.ts'
 
@@ -154,7 +155,7 @@ export class Shadow {
         await this.#git(['update-ref', '-d', `refs/oceania/${session}`]).catch(() => {})
         throw error
       }
-    }).catch((error) => console.error(`Oceania: the shadow ref of session ${session} failed.`, error))
+    }).catch((error) => log(`Oceania: the shadow ref of session ${session} failed.`, error))
   }
 
   /** Merges the shadow refs of sessions `a` and `b` with `git merge-tree`. No work tree changes. */
@@ -193,7 +194,7 @@ export class Shadow {
       // `git worktree prune` removes the data of the deleted worktree from the clone.
       if (existsSync(this.dir)) {
         await this.#serial(() => this.#git(['worktree', 'prune'])).catch((error) => {
-          console.error('Oceania: git worktree prune failed.', error)
+          log('Oceania: git worktree prune failed.', error)
         })
       }
     }
