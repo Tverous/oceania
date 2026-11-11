@@ -54,6 +54,8 @@ export interface HookOptions {
   /** Completes when the master agent has no round to run. */
   settled: () => Promise<void>
   holdMs: number
+  /** Gets the git data of each PostToolUse after `observe`. It must not wait for slow work. */
+  observed?: (session: string, git: GitInfo) => void
 }
 
 /**
@@ -93,7 +95,10 @@ export async function handleHook(
     case 'PreToolUse':
       return preToolUse(memory, id, payload)
     case 'PostToolUse': {
-      if (git) memory.observe(id, git)
+      if (git) {
+        memory.observe(id, git)
+        opts.observed?.(id, git)
+      }
       const notes = memory.takeNotes(id, false)
       const context = send(memory, notes, updates(memory.readEvents(id), notes))
       return context === undefined ? {} : { context }

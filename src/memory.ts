@@ -46,7 +46,7 @@ CREATE TABLE IF NOT EXISTS conflicts (
 CREATE TABLE IF NOT EXISTS decisions (
   issue INTEGER NOT NULL, option TEXT NOT NULL, author TEXT NOT NULL, at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS events (
-  id INTEGER PRIMARY KEY, kind TEXT NOT NULL, session TEXT, text TEXT NOT NULL);
+  id INTEGER PRIMARY KEY, kind TEXT NOT NULL, session TEXT, text TEXT NOT NULL, at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS meta (name TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS pushes (
   id INTEGER PRIMARY KEY, session TEXT NOT NULL, files TEXT NOT NULL, patch TEXT NOT NULL,
@@ -292,6 +292,22 @@ export class Memory {
     return this.#sql.get`SELECT coalesce(max(id), 0) AS id FROM events`?.id as number
   }
 
+  /**
+   * Adds a `stall` event for each working session whose last event is not after `before` (spec §7.4).
+   * The stall event stays the last event of the session until the session adds an event.
+   * Thus Tower reports each stall once.
+   */
+  reportStalls(before: number): void {
+    const stalled = this.#sql.all`SELECT s.* FROM sessions s
+      JOIN events e ON e.id = (SELECT max(id) FROM events WHERE session = s.id)
+      WHERE s.status = 'working' AND e.kind != 'stall' AND e.at <= ${before}
+      ORDER BY s.rowid`.map((r) => record<Session>(r))
+    if (!stalled.length) return
+    this.#write(() => {
+      for (const s of stalled) this.#event('stall', s.id, `${this.#who(s)} may be stalled.`)
+    })
+  }
+
   /** Creates a conflict without `id`, or updates the conflict with `id`. Returns the `id`. */
   trackConflict(c: ConflictInput): number {
     return this.#write(() => {
@@ -452,7 +468,8 @@ export class Memory {
   }
 
   #event(kind: EventKind, session: string | undefined, text: string): void {
-    this.#sql.run`INSERT INTO events (kind, session, text) VALUES (${kind}, ${session ?? null}, ${text})`
+    this.#sql.run`INSERT INTO events (kind, session, text, at)
+      VALUES (${kind}, ${session ?? null}, ${text}, ${Date.now()})`
   }
 
   #note(session: string, text: string, blocking: boolean): void {

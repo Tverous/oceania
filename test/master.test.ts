@@ -1,10 +1,13 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { z } from 'zod'
 import { Memory } from '../src/memory.ts'
-import { createTools, startMaster } from '../src/master.ts'
+import { createTools, ROUND_MS, STALL_MS, startMaster } from '../src/master.ts'
 import type { Chat, Specs, Tools } from '../src/master.ts'
+import { Shadow } from '../src/shadow.ts'
 import { clip } from '../src/text.ts'
 import type { Conflict, Status } from '../src/types.ts'
 
@@ -59,18 +62,21 @@ function highConflict(m: Memory, issue?: number): number {
   })
 }
 
+/** These tests do not use check_merge, so the Shadow never clones. test/shadow.test.ts tests check_merge. */
+const shadow = new Shadow(join(tmpdir(), 'tower-unused-shadow'))
+
 const QUESTION = { question: 'Which trial terms?', options: ['14 days, card required', '30 days, no card'] }
 
 test('notify writes a Tower note', async () => {
   const m = setup()
-  const tools = createTools(m, fakeChat(m).chat, specs)
+  const tools = createTools(m, fakeChat(m).chat, specs, shadow)
   await tools.notify.run({ session: 'b', summary: 'S', instruction: 'I', blocking: true })
   assert.equal(m.takeNotes('b', true)[0].text, 'Tower note: S\nDo this: I')
 })
 
 test('track_conflict creates and resolves a conflict', async () => {
   const m = setup()
-  const tools = createTools(m, fakeChat(m).chat, specs)
+  const tools = createTools(m, fakeChat(m).chat, specs, shadow)
   const args = { sessions: ['a', 'b'], summary: 'Both add the Pro plan.', stage: 'before', impact: 'low' }
   assert.equal(await tools.track_conflict.run({ ...args, status: 'open' }), 'Conflict #1')
   await tools.track_conflict.run({ ...args, id: 1, status: 'resolved' })
@@ -81,7 +87,7 @@ test('read_memory shows the posted summaries and what reached main', async () =>
   const m = setup()
   const posted: string[] = []
   const chat: Chat = { ...fakeChat(m).chat, post: async (text) => void posted.push(text) }
-  const tools = createTools(m, chat, specs)
+  const tools = createTools(m, chat, specs, shadow)
   await tools.post_activity.run({ text: 'Conflict #1: Bob uses the plan data of Alice.' })
   const patch = `diff --git a/src/plans.ts b/src/plans.ts\n${'+  { id: "pro", trialDays: 30 },\n'.repeat(500)}`
   m.observe('a', { files: ['src/plans.ts'], patch, main: 'm1' })
@@ -107,14 +113,14 @@ test('post_activity records nothing when Slack fails', async () => {
       throw new Error('Slack is down.')
     },
   }
-  await assert.rejects(createTools(m, chat, specs).post_activity.run({ text: 'S' }), /Slack is down/)
+  await assert.rejects(createTools(m, chat, specs, shadow).post_activity.run({ text: 'S' }), /Slack is down/)
   assert.deepEqual(m.posts(), [])
 })
 
 test('escalate opens the Slack channel before it pauses sessions', async () => {
   const m = setup()
   const { chat, opened, seen } = fakeChat(m)
-  const tools = createTools(m, chat, specs)
+  const tools = createTools(m, chat, specs, shadow)
   const id = highConflict(m, 1)
   const result = await tools.escalate.run({ conflict: id, ...QUESTION })
   assert.equal(opened[0].author, 'Tverous')
@@ -127,7 +133,7 @@ test('escalate opens the Slack channel before it pauses sessions', async () => {
 
 test('escalate pauses nothing when Slack fails', async () => {
   const m = setup()
-  const tools = createTools(m, fakeChat(m, true).chat, specs)
+  const tools = createTools(m, fakeChat(m, true).chat, specs, shadow)
   const id = highConflict(m, 1)
   await assert.rejects(tools.escalate.run({ conflict: id, ...QUESTION }), /Slack is down/)
   assert.equal(m.session('a')?.status, 'idle')
@@ -137,7 +143,7 @@ test('escalate pauses nothing when Slack fails', async () => {
 
 test('escalate rejects a long option', () => {
   const m = setup()
-  const tools = createTools(m, fakeChat(m).chat, specs)
+  const tools = createTools(m, fakeChat(m).chat, specs, shadow)
   const schema = z.object(tools.escalate.schema)
   const args = (option: string) => ({ conflict: 1, question: 'Which trial terms?', options: [option, '30 days, no card'] })
   assert.equal(schema.safeParse(args('x'.repeat(76))).success, false)
@@ -147,7 +153,7 @@ test('escalate rejects a long option', () => {
 test('escalate rejects a conflict without an issue, a second escalate, and an author without Slack', async () => {
   const m = setup()
   const { chat, opened } = fakeChat(m)
-  const tools = createTools(m, chat, specs)
+  const tools = createTools(m, chat, specs, shadow)
   await assert.rejects(tools.escalate.run({ conflict: highConflict(m), ...QUESTION }), /has no issue/)
   const id = highConflict(m, 1)
   await tools.escalate.run({ conflict: id, ...QUESTION })
@@ -254,4 +260,30 @@ test('startMaster runs the next batch after a failed round', async (t) => {
   assert.equal(prompts.length, 2)
   assert.doesNotMatch(prompts[1], /Add the Pro plan/)
   master.stop()
+})
+
+test('resync reports a stalled session once', async (t) => {
+  t.mock.timers.enable({ apis: ['Date', 'setInterval'] })
+  const resyncMs = 1_000
+  const m = setup()
+  m.setStatus('a', 'working')
+  m.addTask({ session: 'a', summary: 'Add the Pro plan', issue: 1 })
+  const prompts: string[] = []
+  const master = startMaster(m, {} as Tools, async (prompt) => void prompts.push(prompt), 10, ROUND_MS, resyncMs)
+  t.after(() => master.stop())
+  const stalls = () => m.eventsAfter(0).filter((e) => e.kind === 'stall')
+  t.mock.timers.tick(STALL_MS - resyncMs)
+  assert.equal(stalls().length, 0)
+  t.mock.timers.tick(resyncMs)
+  assert.deepEqual(
+    stalls().map((e) => [e.session, e.text]),
+    [['a', "Alice's agent (Copilot CLI) may be stalled."]],
+  )
+  t.mock.timers.tick(STALL_MS)
+  assert.equal(stalls().length, 1)
+  await master.settled()
+  assert.equal(prompts.length, 0)
+  m.observe('a', { files: ['src/plans.ts'], patch: 'P1', main: 'm1' })
+  t.mock.timers.tick(STALL_MS)
+  assert.deepEqual(stalls().map((e) => e.session), ['a', 'a'])
 })

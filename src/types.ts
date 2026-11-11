@@ -9,7 +9,7 @@ export const STAGE_LABELS: Record<Stage, string> = {
   after: 'After: changes on main',
 }
 
-export type EventKind = 'join' | 'task' | 'diff' | 'push' | 'conflict' | 'decision'
+export type EventKind = 'join' | 'task' | 'diff' | 'push' | 'conflict' | 'decision' | 'stall'
 
 export interface Member {
   email: string
@@ -111,6 +111,8 @@ export interface TowerEvent {
   kind: EventKind
   session?: string
   text: string
+  /** Epoch ms when Tower added the event. */
+  at: number
 }
 
 export type SessionView = Session & { name: string; task?: Task; files: string[] }

@@ -15,6 +15,7 @@ if (command === 'hook' && (values.agent === 'copilot' || values.agent === 'claud
   const { startSlack } = await import('./slack.ts')
   const { createTools, startMaster } = await import('./master.ts')
   const { claudeJudge } = await import('./judge.ts')
+  const { Shadow } = await import('./shadow.ts')
   const env = (name: string): string => {
     const value = process.env[name]
     if (!value) throw new Error(`Set ${name} in .env.`)
@@ -35,8 +36,15 @@ if (command === 'hook' && (values.agent === 'copilot' || values.agent === 'claud
 
   const specs = ghSpecs(env('TOWER_REPO'))
   const chat = await startSlack(memory, specs, { bot: env('SLACK_BOT_TOKEN'), app: env('SLACK_APP_TOKEN') })
-  const master = startMaster(memory, createTools(memory, chat, specs), claudeJudge)
-  createServer(memory, { settled: master.settled, holdMs: HOLD_MS }).listen(4100, '127.0.0.1', () => {
+  // The clone for check_merge. Tower clones the repo of the first session that reports git data.
+  const shadow = new Shadow('.tower/repo')
+  const master = startMaster(memory, createTools(memory, chat, specs, shadow), claudeJudge)
+  const server = createServer(memory, {
+    settled: master.settled,
+    holdMs: HOLD_MS,
+    observed: (id, git) => void shadow.update(id, git),
+  })
+  server.listen(4100, '127.0.0.1', () => {
     console.log('Tower is ready at http://127.0.0.1:4100.')
   })
 } else {

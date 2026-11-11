@@ -21,23 +21,25 @@ Impact. The impact tells who solves the conflict:
 Rules:
 1. Call read_memory first. If a session has a linked issue, call get_spec for that issue.
 2. Examine each new event and each open conflict. Find the stage and the impact. Use track_conflict to create or update the conflict record. If the conflict is about a spec, give the issue.
-3. When the changes of a conflict do not conflict any more, use track_conflict to set the status to resolved. For example, main has the work of the later session, and that work agrees. Or, main has the decision.
-4. Low impact: Use notify to tell the session that must change its work what to do. Then use post_activity to post one summary. The summary tells the conflict, the stage, the agents, and the change.
+3. If the diffs of two sessions in the same repo change the same file, use check_merge for these sessions. If check_merge shows files that conflict, give these files to track_conflict.
+4. If the diff of one session changes code that the diff of another session uses, use run_in_worktree for these sessions. If the tests fail, use track_conflict to record the conflict.
+5. When the changes of a conflict do not conflict any more, use track_conflict to set the status to resolved. For example, main has the work of the later session, and that work agrees. Or, main has the decision.
+6. Low impact: Use notify to tell the session that must change its work what to do. Then use post_activity to post one summary. The summary tells the conflict, the stage, the agents, and the change.
    - before and during: The session that started first has priority. The later session changes its work.
    - after: The change on main has priority. Use notify to tell the session that did not push to pull main with rebase before it pushes. Then it changes its work if necessary.
-5. Duplicate work: Two tasks can do the same work. Or, one task can need data that a different session adds. For example, both tasks add the Pro plan. Or, the pricing page needs the Pro plan that a different session adds. This is a low impact conflict at the before stage. It is a different conflict from a high impact conflict about the same sessions. Record it also when a high impact conflict is open. Do these steps:
+7. Duplicate work: Two tasks can do the same work. Or, one task can need data that a different session adds. For example, both tasks add the Pro plan. Or, the pricing page needs the Pro plan that a different session adds. This is a low impact conflict at the before stage. It is a different conflict from a high impact conflict about the same sessions. Record it also when a high impact conflict is open. Do these steps:
    - Use track_conflict to record the conflict. Give the files of the earlier session.
    - Use notify to tell the later session to keep the data of the earlier session and to change only its part. For example, the summary is "Alice's agent (Copilot CLI) already adds the Pro plan to src/plans.ts." The instruction is "Do not add the Pro plan again. Use her plan data. Change only the pricing page."
    - Use post_activity to post one summary.
-   - Later, the live check moves the conflict to during. A push of the earlier session moves the conflict to after. Then do rule 4 for the after stage.
+   - Later, the live check moves the conflict to during. A push of the earlier session moves the conflict to after. Then do rule 6 for the after stage.
    - Set the conflict to resolved when main has the work of the later session.
-6. High impact: Call escalate one time for each conflict. Give 2 or 3 short options. Each option has 75 characters or less.
-7. After a decision: Tower sends the decision to the paused sessions. Do not send it again. Make sure that main gets the decision. If a change on main must change, use notify to give the fix to a session that still works.
-8. The pushes in read_memory show the changes that reached main. Set a high impact conflict to resolved only when a push shows that main has the decision. Until then, keep the conflict open.
-9. Do not call escalate for a conflict that the agents can solve.
-10. Do not write a note, a summary, or a question again if Memory already has it. The posts in read_memory show the summaries that you posted.
-11. If no action is necessary, stop.
-12. Write each note and each summary in ASD-STE100 Simplified Technical English. Use short sentences. Write one instruction in each sentence.`
+8. High impact: Call escalate one time for each conflict. Give 2 or 3 short options. Each option has 75 characters or less.
+9. After a decision: Tower sends the decision to the paused sessions. Do not send it again. Make sure that main gets the decision. If a change on main must change, use notify to give the fix to a session that still works.
+10. The pushes in read_memory show the changes that reached main. Set a high impact conflict to resolved only when a push shows that main has the decision. Until then, keep the conflict open.
+11. Do not call escalate for a conflict that the agents can solve.
+12. Do not write a note, a summary, or a question again if Memory already has it. The posts in read_memory show the summaries that you posted.
+13. If no action is necessary, stop.
+14. Write each note and each summary in ASD-STE100 Simplified Technical English. Use short sentences. Write one instruction in each sentence.`
 
 /** Runs one judge round with Claude Opus and the Tower tools (spec §7.8). `signal` stops the query. */
 export async function claudeJudge(prompt: string, tools: Tools, signal?: AbortSignal): Promise<void> {
