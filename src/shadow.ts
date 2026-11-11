@@ -8,8 +8,11 @@ import type { GitInfo } from './types.ts'
 
 /** Longest run of one git command, so that a stuck fetch does not stop the queue. */
 const GIT_TIMEOUT_MS = 60_000
-/** Longest run of `npm test` in a merged worktree. */
-export const TEST_TIMEOUT_MS = 120_000
+/**
+ * Longest run of `npm test` in a merged worktree. It is half of ROUND_MS in master.ts, because Tower stops
+ * a judge round after ROUND_MS. Thus the master agent gets the test result in the same round.
+ */
+export const TEST_TIMEOUT_MS = 60_000
 /** The secrets in the .env of Tower. The tests run code from the agents, so they do not get these values. */
 const SECRETS = ['ANTHROPIC_API_KEY', 'SLACK_BOT_TOKEN', 'SLACK_APP_TOKEN']
 
