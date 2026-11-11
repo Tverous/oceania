@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import type { ZodRawShape } from 'zod'
+import { feed, log } from './log.ts'
 import type { Memory } from './memory.ts'
 import { TEST_TIMEOUT_MS } from './shadow.ts'
 import type { Shadow } from './shadow.ts'
@@ -22,6 +23,8 @@ const LAST_POSTS = 20
 
 /** Only events that agents write start a round (spec §7.4). */
 const TRIGGERS: EventKind[] = ['task', 'diff', 'push']
+/** Tools that only examine. The round line counts the calls of the other tools as actions. */
+const READS = ['read_memory', 'get_spec', 'check_merge', 'run_in_worktree']
 /** Longest Slack button text. */
 const MAX_OPTION = 75
 
@@ -148,6 +151,11 @@ export function createTools(memory: Memory, chat: Chat, specs: Specs, shadow: Sh
         const channel = `oceania-${conflict.issue}-${Date.now().toString(36)}`
         await chat.openConflict({ ...conflict, channel, author, question, options })
         memory.escalate(id, { channel, author, question, options })
+        const paused = conflict.sessions.flatMap((s) => {
+          const v = memory.session(s)
+          return v ? [memory.member(v.member)?.name ?? v.member] : []
+        })
+        feed({ type: 'ask', at: Date.now(), author: member.name, channel, paused })
         return `Opened #${channel}`
       },
     }),
@@ -215,6 +223,7 @@ export type Judge = (prompt: string, tools: Tools, signal: AbortSignal) => Promi
  * so old events do not start a round after a restart. At most one round runs at a time.
  * A round that takes longer than `roundMs` is aborted, and the next batch runs.
  * Each `resyncMs`, a deterministic check reports stalled sessions. A stall event does not start a round.
+ * Each round feeds one round line. The errors go to the log.
  */
 export function startMaster(
   memory: Memory,
@@ -228,6 +237,7 @@ export function startMaster(
   let timer: NodeJS.Timeout | undefined
   let running = false
   let stopped = false
+  let rounds = 0
   const waiters = new Set<() => void>()
   const pending = () => memory.eventsAfter(cursor).some((e) => TRIGGERS.includes(e.kind))
   const busy = () => running || (!stopped && pending())
@@ -254,13 +264,33 @@ export function startMaster(
     const aborted = new Promise<never>((_, reject) => {
       abort.signal.addEventListener('abort', () => reject(abort.signal.reason), { once: true })
     })
+    const started = Date.now()
+    let actions = 0
+    let failed = false
+    // Count the successful calls of the tools that act, for the round line.
+    const counted = Object.fromEntries(
+      Object.entries(tools).map(([name, t]): [string, Tool] => [
+        name,
+        {
+          ...t,
+          async run(args) {
+            const result = await t.run(args)
+            if (!READS.includes(name)) actions++
+            return result
+          },
+        },
+      ]),
+    )
     try {
-      await Promise.race([judge(roundPrompt(events), tools, abort.signal), aborted])
+      await Promise.race([judge(roundPrompt(events), counted, abort.signal), aborted])
     } catch (error) {
-      console.error('Oceania: the judge round failed.', error)
+      failed = true
+      log('Oceania: the judge round failed.', error)
     } finally {
       clearTimeout(limit)
     }
+    rounds++
+    feed({ type: 'round', at: Date.now(), round: rounds, ms: Date.now() - started, actions, failed })
     running = false
     schedule()
     if (!busy()) release()
@@ -271,7 +301,7 @@ export function startMaster(
     try {
       memory.reportStalls(Date.now() - STALL_MS)
     } catch (error) {
-      console.error('Oceania: the resync check failed.', error)
+      log('Oceania: the resync check failed.', error)
     }
   }, resyncMs).unref()
   return {
@@ -324,8 +354,9 @@ export async function decide(
   memory.decide(channel, option, resume(issue, name, option))
   try {
     await specs.comment(issue, decisionComment(option, github))
+    feed({ type: 'comment', at: Date.now(), issue })
   } catch (error) {
-    console.error(`Oceania: the decision comment on #${issue} failed. The decision stays.`, error)
+    log(`Oceania: the decision comment on #${issue} failed. The decision stays.`, error)
   }
   return { ok: true, option }
 }

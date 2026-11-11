@@ -46,6 +46,7 @@ Memory keeps one record for each conflict, from discovery to resolution. The sta
 - **Merge check.** Oceania keeps a bare clone of the repo in `.oceania/repo` (not in git). It clones `https://<repo>.git` when the first session reports git data. After each tool call, Oceania updates the shadow ref `refs/oceania/<session>` in the background: a commit with the session diff on top of the base commit of the session. The `check_merge` tool runs `git merge-tree --write-tree` on the shadow refs of two sessions and returns the files that conflict. No work tree changes.
 - **Test check.** The `run_in_worktree` tool merges the shadow refs of two sessions in the same way. If the merge has no conflicts, Oceania checks out the merged tree in a temporary `git worktree` and runs `npm test` there. Thus the master agent can find a change in one diff that breaks the code in the other diff. The tool returns the test output (at most 9,000 bytes) when the tests fail. Oceania stops the tests after 60 seconds and always removes the temporary worktree. If `package.json` has no `test` script, Oceania does not run tests. Oceania does not run `npm install` in the worktree. The tests run the code of the agents on the Oceania computer, and they do not get the Slack and Anthropic secrets from `.env`.
 - **Each round,** the master agent checks each open conflict again. It updates the stage and the impact, takes the next action, or marks the conflict resolved. A decision stays open until main has it.
+- **History.** Memory keeps the history of each conflict: one step for the start and for each change of stage, impact, or status. The status board shows it as one line, for example `Before 9:03 PM → During 9:04 PM → After 9:05 PM → Resolved 9:06 PM`. The Oceania feed prints one line for each change.
 
 ## Requirements
 
@@ -83,6 +84,8 @@ OCEANIA_REPO=<owner>/<repo with the spec issues>
   { "name": "Bob", "email": "bob@example.com" }
 ]
 ```
+
+**Oceania feed.** `npm start` prints one short line for each message that goes through Oceania: the events of the agents (join, task, change, push), each text that Oceania sends to an agent (team status, the tasks and pushes of the other agents, block, pause, note, resume), each change of a conflict lifecycle (for example `Conflict #2 · Before → During · low impact`), the Slack questions, the decisions, and one line for each judge round. The colors show the stage of a conflict. Set `NO_COLOR=1` to stop the colors. The full texts go to `oceania.log` in the working directory: the judge results and tool calls, the Slack logs, the errors, and each complete text that an agent got. `oceania.log` is not in git. `scripts/reset-demo.sh` removes it.
 
 ## Hook settings
 

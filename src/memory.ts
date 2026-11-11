@@ -5,6 +5,7 @@ import { who } from './text.ts'
 import { STAGE_LABELS } from './types.ts'
 import type {
   Conflict,
+  ConflictStep,
   Decision,
   Diff,
   EventKind,
@@ -41,7 +42,7 @@ CREATE TABLE IF NOT EXISTS notes (
 CREATE TABLE IF NOT EXISTS conflicts (
   id INTEGER PRIMARY KEY, sessions TEXT NOT NULL, files TEXT NOT NULL, summary TEXT NOT NULL,
   stage TEXT NOT NULL, impact TEXT NOT NULL, status TEXT NOT NULL, issue INTEGER,
-  channel TEXT UNIQUE, author TEXT, question TEXT, options TEXT, decision TEXT,
+  history TEXT NOT NULL, channel TEXT UNIQUE, author TEXT, question TEXT, options TEXT, decision TEXT,
   updated INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS decisions (
   issue INTEGER NOT NULL, option TEXT NOT NULL, author TEXT NOT NULL, at INTEGER NOT NULL);
@@ -77,7 +78,14 @@ function toNote(row: Row): Note {
 }
 
 function toConflict(row: Row): Conflict {
-  return record<Conflict>(row, ['sessions', 'files', 'options'])
+  return record<Conflict>(row, ['sessions', 'files', 'history', 'options'])
+}
+
+/** `history` with a new step at `at` when the stage, impact, or status of `c` is not the same as in the last step. */
+function withStep(history: ConflictStep[], c: Pick<Conflict, 'stage' | 'impact' | 'status'>, at: number): ConflictStep[] {
+  const last = history.at(-1)
+  if (last?.stage === c.stage && last.impact === c.impact && last.status === c.status) return history
+  return [...history, { stage: c.stage, impact: c.impact, status: c.status, at }]
 }
 
 function conflictText(id: number, c: ConflictInput): string {
@@ -195,7 +203,8 @@ export class Memory {
           ON CONFLICT (name) DO UPDATE SET value = excluded.value`
         for (const c of this.conflicts()) {
           if (c.status === 'open' && c.files.some((f) => pushed.includes(f))) {
-            this.#sql.run`UPDATE conflicts SET stage = 'after', updated = ${now} WHERE id = ${c.id}`
+            const history = JSON.stringify(withStep(c.history, { ...c, stage: 'after' }, now))
+            this.#sql.run`UPDATE conflicts SET stage = 'after', history = ${history}, updated = ${now} WHERE id = ${c.id}`
           }
         }
       }
@@ -482,14 +491,16 @@ export class Memory {
     const issue = c.issue ?? null
     const now = Date.now()
     let id = c.id
+    const history = JSON.stringify(withStep(id === undefined ? [] : (this.conflict(id)?.history ?? []), c, now))
     if (id === undefined) {
-      const result = this.#sql.run`INSERT INTO conflicts (sessions, files, summary, stage, impact, status, issue, updated)
-        VALUES (${sessions}, ${files}, ${c.summary}, ${c.stage}, ${c.impact}, ${c.status}, ${issue}, ${now})`
+      const result = this.#sql.run`INSERT INTO conflicts
+        (sessions, files, summary, stage, impact, status, history, issue, updated)
+        VALUES (${sessions}, ${files}, ${c.summary}, ${c.stage}, ${c.impact}, ${c.status}, ${history}, ${issue}, ${now})`
       id = Number(result.lastInsertRowid)
     } else {
       this.#sql.run`UPDATE conflicts SET sessions = ${sessions}, files = ${files}, summary = ${c.summary},
-        stage = ${c.stage}, impact = ${c.impact}, status = ${c.status}, issue = ${issue}, updated = ${now}
-        WHERE id = ${id}`
+        stage = ${c.stage}, impact = ${c.impact}, status = ${c.status}, history = ${history}, issue = ${issue},
+        updated = ${now} WHERE id = ${id}`
     }
     this.#event('conflict', undefined, conflictText(id, c))
     return id

@@ -63,6 +63,14 @@ export interface Note {
   delivered: boolean
 }
 
+/** The stage, impact, and status of a conflict from `at` (epoch ms). */
+export interface ConflictStep {
+  stage: Stage
+  impact: Impact
+  status: 'open' | 'resolved'
+  at: number
+}
+
 export interface Conflict {
   id: number
   sessions: string[]
@@ -71,6 +79,8 @@ export interface Conflict {
   stage: Stage
   impact: Impact
   status: 'open' | 'resolved'
+  /** One step for the start and for each change of stage, impact, or status. Oldest first. */
+  history: ConflictStep[]
   issue?: number
   /** Slack channel. Set only after `escalate`. */
   channel?: string

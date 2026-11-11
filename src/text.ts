@@ -1,5 +1,5 @@
 import { STAGE_LABELS } from './types.ts'
-import type { Note, Snapshot, OceaniaEvent } from './types.ts'
+import type { ConflictStep, Note, Snapshot, OceaniaEvent, Stage } from './types.ts'
 
 /** Largest text, in UTF-8 bytes, that Oceania sends to an agent. */
 export const MAX_TEXT = 9000
@@ -34,6 +34,21 @@ export function mrkdwn(raw: string, max = Infinity): string {
 /** `<name>'s agent (<agent>)`. `name` is the member name and `agent` is the display name, for example `Copilot CLI`. */
 export function who(name: string, agent: string): string {
   return `${name}'s agent (${agent})`
+}
+
+export type StepName = 'Before' | 'During' | 'After' | 'Resolved'
+
+const STEP_NAMES: Record<Stage, StepName> = { before: 'Before', during: 'During', after: 'After' }
+
+/**
+ * The lifecycle of a conflict, oldest first, for example Before, During, After, Resolved (spec §7.10).
+ * A resolved step is Resolved. When steps that follow each other have the same name, only the first stays.
+ * Thus a change of the impact only is not a new step.
+ */
+export function lifecycle(history: ConflictStep[]): { name: StepName; at: number }[] {
+  return history
+    .map((h) => ({ name: h.status === 'resolved' ? 'Resolved' : STEP_NAMES[h.stage], at: h.at }) as const)
+    .filter((h, i, all) => h.name !== all[i - 1]?.name)
 }
 
 /** Deny reason for a write to a file in another session's diff (spec §7.4). `diff` is their patch for `path`. */

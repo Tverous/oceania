@@ -2,5 +2,6 @@ node_modules/
 .env
 members.json
 oceania.db*
+oceania.log
 .DS_Store
 .oceania/

@@ -3,8 +3,11 @@ import assert from 'node:assert/strict'
 import { request } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { setTimeout as sleep } from 'node:timers/promises'
+import { feedLine } from '../src/feed.ts'
+import type { FeedItem } from '../src/feed.ts'
+import { onFeed } from '../src/log.ts'
 import { Memory } from '../src/memory.ts'
-import { createServer, handleHook } from '../src/server.ts'
+import { createServer, handleHook, reportEvents } from '../src/server.ts'
 import type { HookPayload } from '../src/server.ts'
 import { MAX_TEXT, note, resume } from '../src/text.ts'
 import type { GitInfo, HookDecision } from '../src/types.ts'
@@ -379,4 +382,194 @@ test('a Stop hold whose request ends leaves the decision for the next hook', asy
   assert.equal(m.session('b')?.status, 'idle')
   const read = { hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: 'src/plans.ts' } }
   assert.deepEqual(await hook(m, 'b', read), { deny: decision })
+})
+
+/** Collects the feed items of one test. */
+function collect(t: { after(fn: () => void): void }): FeedItem[] {
+  const items: FeedItem[] = []
+  t.after(onFeed((item) => void items.push(item)))
+  return items
+}
+
+function deliveries(items: FeedItem[]) {
+  return items.flatMap((i) => (i.type === 'delivery' ? [i] : []))
+}
+
+test('each hook reports the texts that Oceania sends to an agent', async (t) => {
+  const items = collect(t)
+  const m = setup()
+  const start = await hook(m, 'a', { hook_event_name: 'SessionStart' }, git('a'))
+  await hook(m, 'a', { hook_event_name: 'UserPromptSubmit', prompt: 'Add the Pro plan from #1.' })
+  await hook(m, 'a', { hook_event_name: 'PostToolUse' }, git('a', ['src/plans.ts'], patch('src/plans.ts', '// Pro')))
+  await hook(m, 'b', { hook_event_name: 'SessionStart' }, git('b'))
+  const blocked = await hook(m, 'b', edit('/work/bob/src/plans.ts'), git('b'))
+  // A context with only event lines is not reported.
+  assert.match((await hook(m, 'b', { hook_event_name: 'PostToolUse' }, git('b'))).context ?? '', /^Oceania updates:/)
+  const id = m.trackConflict({ sessions: ['a', 'b'], summary: 'S', stage: 'before', impact: 'high', status: 'open', issue: 1 })
+  m.escalate(id, { channel: CHANNEL, author: 'Tverous', question: 'Which trial terms?', options: ['x', 'y'] })
+  const paused = await hook(m, 'a', edit('/work/alice/src/plans.ts'))
+  m.addNote('b', note("Alice's agent (Copilot CLI) already adds the Pro plan.", 'Use her plan data.'), true)
+  setTimeout(() => decide(m), 20)
+  const [stopA, stopB] = await Promise.all([
+    hook(m, 'a', { hook_event_name: 'Stop' }),
+    hook(m, 'b', { hook_event_name: 'Stop' }),
+  ])
+  m.addNote('a', 'Oceania note: S\nDo this: I', false)
+  await hook(m, 'a', { hook_event_name: 'PostToolUse' }, git('a', ['src/plans.ts'], patch('src/plans.ts', '// Pro')))
+
+  const sent = deliveries(items)
+  assert.deepEqual(
+    sent.map((d) => [d.session, d.to, d.kind]),
+    [
+      ['a', 'Alice', 'status'],
+      ['b', 'Bob', 'status'],
+      ['b', 'Bob', 'overlap'],
+      ['a', 'Alice', 'paused'],
+      ['a', 'Alice', 'resume'],
+      ['b', 'Bob', 'resume'],
+      ['b', 'Bob', 'note'],
+      ['a', 'Alice', 'note'],
+    ],
+  )
+  // Each item has the text that the agent got.
+  assert.deepEqual(
+    sent.map((d) => d.text),
+    [
+      start.context,
+      sent[1].text,
+      blocked.deny,
+      paused.deny,
+      stopA.block,
+      resume(1, 'Tverous', '30 days, no card'),
+      note("Alice's agent (Copilot CLI) already adds the Pro plan.", 'Use her plan data.'),
+      'Oceania note: S\nDo this: I',
+    ],
+  )
+  assert.equal(stopB.block, `${sent[5].text}\n${sent[6].text}`)
+  const line = (i: number) => feedLine(sent[i], { width: Infinity, color: false }).slice(10)
+  assert.equal(line(1), "Oceania → Bob    ⇢ team status: Alice's agent, working: Add the Pro plan from #1.")
+  assert.equal(line(2), "Oceania → Bob    ⊘ blocked a write to src/plans.ts · sent Alice's diff")
+  assert.equal(line(3), 'Oceania → Alice  ‖ paused until Tverous decides')
+})
+
+test('a failed feed subscriber does not change the hook response', async (t) => {
+  t.mock.method(console, 'error', () => {})
+  t.after(
+    onFeed(() => {
+      throw new Error('The terminal is closed.')
+    }),
+  )
+  const m = setup()
+  await escalated(m)
+  const d = await hook(m, 'a', { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'ls' } })
+  assert.match(d.deny ?? '', /^Oceania paused this session\.\n/)
+})
+
+test('reportEvents feeds the Memory events and each change of a conflict lifecycle', async (t) => {
+  const items = collect(t)
+  const m = setup()
+  const stop = reportEvents(m)
+  t.after(stop)
+  await hook(m, 'a', { hook_event_name: 'SessionStart' }, git('a'))
+  await hook(m, 'a', { hook_event_name: 'UserPromptSubmit', prompt: 'Add the Pro plan from #1 to src/plans.ts.' })
+  m.reportStalls(Date.now() + 1)
+  await hook(m, 'a', { hook_event_name: 'PostToolUse' }, git('a', ['src/plans.ts'], patch('src/plans.ts', '// Pro')))
+  // A new diff of the same files is not a new line.
+  await hook(m, 'a', { hook_event_name: 'PostToolUse' }, git('a', ['src/plans.ts'], patch('src/plans.ts', '// Pro 2')))
+  await hook(m, 'b', { hook_event_name: 'SessionStart' }, git('b'))
+  await hook(m, 'b', edit('/work/bob/src/plans.ts'), git('b'))
+  const during = m.conflict(1)
+  assert.ok(during)
+  // A new summary is not a change of the lifecycle.
+  m.trackConflict({ ...during, summary: 'New words.' })
+  // A push moves the conflict to after.
+  await hook(m, 'a', { hook_event_name: 'PostToolUse' }, git('a', [], '', 'm2'))
+  m.trackConflict({ ...during, stage: 'after', status: 'resolved' })
+  await escalated(m)
+  decide(m)
+
+  assert.deepEqual(
+    items.filter((i) => i.type !== 'delivery').map((i) => feedLine(i, { width: Infinity, color: false }).slice(10)),
+    [
+      "Alice's agent    ● joined (Copilot CLI)",
+      "Alice's agent    ▶ task: Add the Pro plan from #1 to src/plans.ts.",
+      "Alice's agent    ! may be stalled",
+      "Alice's agent    ✎ changed src/plans.ts",
+      "Bob's agent      ● joined (Claude Code)",
+      "Oceania          ⚠ Conflict #1 · During · low impact · Bob's agent and Alice's agent change src/plans.ts.",
+      // The push line says that the files left the diff, so no line says that the diff is empty.
+      "Alice's agent    ⬆ pushed to main: src/plans.ts",
+      'Oceania          ⚠ Conflict #1 · During → After · low impact',
+      'Oceania          ✓ Conflict #1 · During → After → Resolved',
+      'Oceania          ⚠ Conflict #2 · Before · HIGH impact · The tasks use different trial terms.',
+      'Tverous          ✓ decided #1: 30 days, no card',
+    ],
+  )
+  // After stop, Memory events are not reported.
+  stop()
+  const events = () => items.filter((i) => i.type !== 'delivery').length
+  const before = events()
+  await hook(m, 'c', { hook_event_name: 'SessionStart' }, git('c'))
+  assert.equal(events(), before)
+})
+
+test('the feed shows the tasks and pushes that a PostToolUse context gives to an agent', async (t) => {
+  const items = collect(t)
+  const m = setup()
+  await hook(m, 'a', { hook_event_name: 'SessionStart' }, git('a'))
+  await hook(m, 'b', { hook_event_name: 'SessionStart' }, git('b'))
+  await hook(m, 'a', { hook_event_name: 'UserPromptSubmit', prompt: 'Add a yearly price to each plan.' })
+  await hook(m, 'a', { hook_event_name: 'PostToolUse' }, git('a', ['src/plans.ts'], patch('src/plans.ts', '// yearly')))
+  const first = await hook(m, 'b', { hook_event_name: 'PostToolUse' }, git('b'))
+  // A context with only a diff is not shown.
+  await hook(m, 'a', { hook_event_name: 'PostToolUse' }, git('a', ['src/plans.ts'], patch('src/plans.ts', '// yearly 2')))
+  assert.match((await hook(m, 'b', { hook_event_name: 'PostToolUse' }, git('b'))).context ?? '', /changed: src\/plans\.ts/)
+  await hook(m, 'a', { hook_event_name: 'PostToolUse' }, git('a', [], '', 'm2'))
+  await hook(m, 'b', { hook_event_name: 'PostToolUse' }, git('b'))
+
+  const updates = deliveries(items).filter((d) => d.kind === 'update')
+  assert.deepEqual(
+    updates.map((d) => [d.session, d.to, d.kind === 'update' && d.events]),
+    [
+      ['b', 'Bob', ["Alice's agent (Copilot CLI) task: Add a yearly price to each plan."]],
+      ['b', 'Bob', ["Alice's agent (Copilot CLI) pushed to main: src/plans.ts"]],
+    ],
+  )
+  assert.equal(updates[0].text, first.context)
+})
+
+test('the feed shows a pause once for each session and conflict, and the agent gets each deny', async (t) => {
+  const items = collect(t)
+  const m = setup()
+  await escalated(m)
+  const read = { hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: 'src/plans.ts' } }
+  const first = await hook(m, 'a', read)
+  assert.deepEqual(await hook(m, 'a', read), first)
+  await hook(m, 'b', read)
+  decide(m)
+  await hook(m, 'a', { hook_event_name: 'Stop' })
+  // A new question pauses Alice again.
+  const id = m.trackConflict({ sessions: ['a'], summary: 'S', stage: 'before', impact: 'high', status: 'open', issue: 2 })
+  m.escalate(id, { channel: 'oceania-2-x', author: 'Tverous', question: 'Q', options: ['x', 'y'] })
+  await hook(m, 'a', read)
+  assert.deepEqual(
+    deliveries(items)
+      .filter((d) => d.kind === 'paused')
+      .map((d) => d.session),
+    ['a', 'b', 'a'],
+  )
+})
+
+test('the feed shows a blocked write before the conflict that the write starts', async (t) => {
+  const items = collect(t)
+  const m = setup()
+  t.after(reportEvents(m))
+  await hook(m, 'a', { hook_event_name: 'SessionStart' }, git('a'))
+  await hook(m, 'a', { hook_event_name: 'PostToolUse' }, git('a', ['src/plans.ts'], patch('src/plans.ts', '// Pro')))
+  await hook(m, 'b', { hook_event_name: 'SessionStart' }, git('b'))
+  await hook(m, 'b', edit('/work/bob/src/plans.ts'), git('b'))
+  assert.deepEqual(
+    items.flatMap((i) => (i.type === 'conflict' ? ['conflict'] : i.type === 'delivery' && i.kind === 'overlap' ? ['overlap'] : [])),
+    ['overlap', 'conflict'],
+  )
 })

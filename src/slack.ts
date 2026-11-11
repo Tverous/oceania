@@ -1,6 +1,7 @@
-import { App, webApi } from '@slack/bolt'
-import type { BlockAction, ButtonAction, types } from '@slack/bolt'
+import { App, LogLevel, webApi } from '@slack/bolt'
+import type { BlockAction, ButtonAction, Logger, types } from '@slack/bolt'
 import { homeView } from './board.ts'
+import { feed, log } from './log.ts'
 import { decide } from './master.ts'
 import type { Chat, Specs } from './master.ts'
 import type { Memory } from './memory.ts'
@@ -26,7 +27,7 @@ export async function startSlack(
   memory: Memory,
   specs: Specs,
   tokens: { bot: string; app: string },
-  app = new App({ token: tokens.bot, appToken: tokens.app, socketMode: true }),
+  app = new App({ token: tokens.bot, appToken: tokens.app, socketMode: true, logger: slackLogger() }),
 ): Promise<Chat> {
   const { client } = app
 
@@ -97,7 +98,7 @@ export async function startSlack(
       for (const { slackId } of memory.members()) {
         if (!slackId || published.get(slackId) === json) continue
         publish(slackId, view, json).catch((error) => {
-          console.error('Oceania: the board update failed.', error)
+          log('Oceania: the board update failed.', error)
         })
       }
     }, BOARD_DEBOUNCE_MS)
@@ -114,6 +115,7 @@ export async function startSlack(
   return {
     async post(text) {
       await client.chat.postMessage({ channel: shared, text: mrkdwn(text) })
+      feed({ type: 'post', at: Date.now(), channel: SHARED })
     },
     async openConflict(c) {
       const { channel, author, question, options } = c
@@ -145,6 +147,31 @@ export async function startSlack(
         ],
       })
     },
+  }
+}
+
+/** Most severe first. A logger writes its level and the levels before it. */
+const LEVELS = [LogLevel.ERROR, LogLevel.WARN, LogLevel.INFO, LogLevel.DEBUG]
+
+/** A Bolt logger that writes the Bolt, Web API, and Socket Mode logs to the Oceania log, from INFO by default. */
+export function slackLogger(): Logger {
+  let level = LogLevel.INFO
+  const at =
+    (l: LogLevel) =>
+    (...msg: unknown[]) => {
+      if (LEVELS.indexOf(l) <= LEVELS.indexOf(level)) log(`Slack [${l.toUpperCase()}]`, ...msg)
+    }
+  return {
+    error: at(LogLevel.ERROR),
+    warn: at(LogLevel.WARN),
+    info: at(LogLevel.INFO),
+    debug: at(LogLevel.DEBUG),
+    setLevel(l) {
+      level = l
+    },
+    getLevel: () => level,
+    // The Slack modules share one logger and each gives it a name. The level is enough to read the log.
+    setName() {},
   }
 }
 
