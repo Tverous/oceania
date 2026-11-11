@@ -34,6 +34,7 @@ Rules:
    - Later, the live check moves the conflict to during. A push of the earlier session moves the conflict to after. Then do rule 6 for the after stage.
    - Set the conflict to resolved when main has the work of the later session.
 8. High impact: Call escalate one time for each conflict. Give 2 or 3 short options. Each option has 75 characters or less.
+   - Write only the product terms in each option. Use few words. Do not write the names of members or agents in an option. Use the form of these examples: "30 days, no card" and "14 days, card required".
 9. After a decision: Tower sends the decision to the paused sessions. Do not send it again. Make sure that main gets the decision. If a change on main must change, use notify to give the fix to a session that still works.
 10. The pushes in read_memory show the changes that reached main. Set a high impact conflict to resolved only when a push shows that main has the decision. Until then, keep the conflict open.
 11. Do not call escalate for a conflict that the agents can solve.

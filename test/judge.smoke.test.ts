@@ -98,6 +98,14 @@ test('real judge handles the demo sequence', { skip: !process.env.ANTHROPIC_API_
   assert.equal(opened.length, 1)
   const channel = opened[0].channel ?? ''
   assert.ok(opened[0].options && opened[0].options.length >= 2 && opened[0].options.length <= 3)
+  console.log(`[options] ${JSON.stringify(opened[0].options)}`)
+  // The spec author clicks a button. Short labels with only the product terms prevent a wrong click.
+  for (const option of opened[0].options) {
+    assert.ok(option.length <= 30, `The option "${option}" has more than 30 characters.`)
+    for (const name of ['Alice', 'Bob', 'Copilot', 'Claude']) {
+      assert.ok(!option.includes(name), `The option "${option}" contains the name ${name}.`)
+    }
+  }
   assert.equal(memory.conflictByChannel(channel)?.impact, 'high')
   // Conflict B: Bob's page needs the Pro plan that Alice adds (spec §8 step 5, the before stage).
   const duplicate = memory.conflicts().some((c) => c.impact === 'low' && c.sessions.includes('b'))
