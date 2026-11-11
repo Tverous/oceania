@@ -213,7 +213,7 @@ Tower 有三個部分：
 
 #### hook
 
-設定 Copilot CLI 的 hook 時，實作者必須使用 PascalCase 事件名稱：`SessionStart`、`UserPromptSubmit`、`PreToolUse`、`PostToolUse` 與 `Stop`。使用 PascalCase 時，Copilot 傳送的 payload 欄位與 Claude Code 相同，例如 `session_id`、`cwd`、`tool_name` 與 `tool_input`。Copilot 也會使用 Claude 的工具名稱，例如 `Edit`、`Write` 與 `Bash`。因此 adapter 只需要一套輸入解析。兩種 agent 的輸出格式仍然不同。因此每份 hook 設定都必須傳入 `--agent copilot` 或 `--agent claude`。
+設定 Copilot CLI 的 hook 時，實作者必須使用 PascalCase 事件名稱：`SessionStart`、`UserPromptSubmit`、`PreToolUse`、`PostToolUse` 與 `Stop`。使用 PascalCase 時，Copilot 傳送的 payload 欄位與 Claude Code 相同，例如 `session_id`、`cwd`、`tool_name` 與 `tool_input`。Copilot 也會使用 Claude 的工具名稱，例如 `Edit`、`Read` 與 `Bash`。但 Copilot 的 `Edit` 的 `tool_input` 是 apply_patch 格式的字串，不是有 `file_path` 的物件（2026-11-11 的 probe）。因此 Tower 伺服器用兩種方式讀取寫入的路徑。兩種 agent 的輸出格式仍然不同。因此每份 hook 設定都必須傳入 `--agent copilot` 或 `--agent claude`。
 
 | 事件 | agent 寫入 Memory | agent 讀取 Memory | Copilot CLI 輸出 | Claude Code 輸出 |
 |---|---|---|---|---|
@@ -247,6 +247,7 @@ Tower 有三個部分：
 - **兩種 agent 都使用 command hook。** Copilot 的 `preToolUse` HTTP hook 必須使用 `https://`。因此兩種 agent 都用 command hook 執行 adapter。
 - **Tower 伺服器故障時，adapter 不得拒絕工具呼叫。** Copilot 的 `preToolUse` command hook 採用 fail-closed。hook 異常結束或回傳非 0 的 exit code 時，Copilot 會拒絕工具呼叫。因此 Tower 伺服器無法連線時，adapter 必須回傳 exit code 0，並允許工具呼叫。
 - **暫停的 session 需要較長的 `Stop` hook timeout。** 實作者把兩種 agent 的 `Stop` hook timeout 設為 600 秒。等待逾時後，agent 進入閒置。agent 會在下一次工具呼叫時收到決定。
+- **Copilot 把 `Stop` 的 `reason` 當成新的 prompt。** Copilot 收到 `decision: "block"` 後，會用 `reason` 送出一次 `UserPromptSubmit`（2026-11-11 的 probe）。Claude Code 不會。因此 Tower 伺服器不把這個 prompt 寫成任務。
 - **每則通知最多強制一輪。** Copilot 在連續 8 次 `block` 後，會強制結束這一輪。因此 adapter 對每則通知只回傳一次 `block`。
 - **agent 結束一輪前，等待進行中的判斷回合。** agent 閒置後，Tower 無法喚醒 agent（第 3 節）。因此 `Stop` hook 先等待判斷回合結束，最多 90 秒。這樣 master agent 才能在 agent 閒置前暫停或通知 agent。
 - **每個 agent 只能載入自己的 Tower hook 設定。** 一個做法是在每個 clone 使用 repo 本地、不納入版本控制的設定檔。Copilot 文件提到，Copilot 部分相容 Claude 格式的 hook。因此實作者必須先驗證這一點。
