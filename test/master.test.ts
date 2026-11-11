@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { z } from 'zod'
 import { Memory } from '../src/memory.ts'
-import { createTools, startMaster } from '../src/master.ts'
+import { createTools, STALL_MS, startMaster } from '../src/master.ts'
 import type { Chat, Specs, Tools } from '../src/master.ts'
 import type { Conflict, Status } from '../src/types.ts'
 
@@ -190,4 +190,30 @@ test('startMaster runs the next batch after a failed round', async (t) => {
   assert.equal(prompts.length, 2)
   assert.doesNotMatch(prompts[1], /Add the Pro plan/)
   master.stop()
+})
+
+test('resync reports a stalled session once', async (t) => {
+  t.mock.timers.enable({ apis: ['Date', 'setInterval'] })
+  const resyncMs = 1_000
+  const m = setup()
+  m.setStatus('a', 'working')
+  m.addTask({ session: 'a', summary: 'Add the Pro plan', issue: 1 })
+  const prompts: string[] = []
+  const master = startMaster(m, {} as Tools, async (prompt) => void prompts.push(prompt), 10, resyncMs)
+  t.after(() => master.stop())
+  const stalls = () => m.eventsAfter(0).filter((e) => e.kind === 'stall')
+  t.mock.timers.tick(STALL_MS - resyncMs)
+  assert.equal(stalls().length, 0)
+  t.mock.timers.tick(resyncMs)
+  assert.deepEqual(
+    stalls().map((e) => [e.session, e.text]),
+    [['a', "Alice's agent (Copilot CLI) may be stalled."]],
+  )
+  t.mock.timers.tick(STALL_MS)
+  assert.equal(stalls().length, 1)
+  await master.settled()
+  assert.equal(prompts.length, 0)
+  m.observe('a', { files: ['src/plans.ts'], patch: 'P1', main: 'm1' })
+  t.mock.timers.tick(STALL_MS)
+  assert.deepEqual(stalls().map((e) => e.session), ['a', 'a'])
 })

@@ -8,6 +8,10 @@ import type { Conflict, EventKind, Spec, TowerEvent } from './types.ts'
 export const DEBOUNCE_MS = 1_500
 /** Longest wait of `settled()`. */
 export const SETTLE_MS = 90_000
+/** Interval of the deterministic check (spec §7.4). */
+export const RESYNC_MS = 60_000
+/** A working session without an event for this time may be stalled. */
+export const STALL_MS = 600_000
 
 /** Only events that agents write start a round (spec §7.4). */
 const TRIGGERS: EventKind[] = ['task', 'diff', 'push']
@@ -147,12 +151,14 @@ export function roundPrompt(events: TowerEvent[]): string {
 /**
  * Runs one judge round for each batch of agent events (spec §7.4). Starts at the latest event,
  * so old events do not start a round after a restart. At most one round runs at a time.
+ * Each `resyncMs`, a deterministic check reports stalled sessions. A stall event does not start a round.
  */
 export function startMaster(
   memory: Memory,
   tools: Tools,
   judge: (prompt: string, tools: Tools) => Promise<void>,
   debounceMs = DEBOUNCE_MS,
+  resyncMs = RESYNC_MS,
 ): { stop(): void; settled(): Promise<void> } {
   let cursor = memory.lastEventId()
   let timer: NodeJS.Timeout | undefined
@@ -186,10 +192,18 @@ export function startMaster(
   }
 
   const off = memory.onChange(schedule)
+  const resync = setInterval(() => {
+    try {
+      memory.reportStalls(Date.now() - STALL_MS)
+    } catch (error) {
+      console.error('Tower: the resync check failed.', error)
+    }
+  }, resyncMs).unref()
   return {
     stop() {
       stopped = true
       off()
+      clearInterval(resync)
       clearTimeout(timer)
       timer = undefined
       if (!busy()) release()
